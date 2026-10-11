@@ -467,12 +467,17 @@ def _anthropic_output_schema() -> dict[str, Any]:
     ``additionalProperties: false`` on every object, no recursion, and no
     numeric/length keywords (``minimum``, ``minLength``, ...) — so the shape is
     expressed with types and ``required`` alone.
+
+    The API also caps how many parameters may use a union type (a type array
+    or ``anyOf``): one ``["string", "null"]`` per translated field per
+    language came to 25 and was rejected with a 400. Translated fields are
+    therefore plain strings, with an empty string meaning "unknown";
+    ``_normalize_result`` already treats an empty value as missing and falls
+    back to English.
     """
     translated = {
         "type": "object",
-        "properties": {
-            field: {"type": ["string", "null"]} for field in TRANSLATED_FIELDS
-        },
+        "properties": {field: {"type": "string"} for field in TRANSLATED_FIELDS},
         "required": list(TRANSLATED_FIELDS),
         "additionalProperties": False,
     }
