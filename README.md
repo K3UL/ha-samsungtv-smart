@@ -95,6 +95,7 @@ you can tune.
 - Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `Pillow`, `pysmartthings>=6.0`
 - For Artwork Identification (optional): a Google Cloud Vision API key and an LLM API key (Anthropic, OpenAI or Gemini)
 - A Samsung Smart TV running **Tizen OS** (2016+), reachable on the local network
+- **Home Assistant and the TV on the same subnet / VLAN.** Samsung's local WebSocket pairing (ports **8001/8002**) generally does **not** work across subnets or VLANs, *even when the ports are reachable and routed*. If HA and the TV must stay on separate networks, you need SNAT / IP masquerading so the TV sees the traffic as coming from a local address — see [Troubleshooting](#setup-wizard-loops-forever--mschanneltimeout-on-8002--mschannelunauthorized-on-8001).
 - For SmartThings features: a Samsung account and a SmartThings-registered TV
 
 ---
@@ -1019,6 +1020,46 @@ logger:
 - Make sure the TV is on and connected to the same network as Home Assistant.
 - Ensure the TV's IP address is correct and reachable (`ping <ip>`).
 - Disable any VLANs or firewall rules blocking ports **8001** and **8002**.
+- Note that *reachable ports are not enough*: Samsung's local pairing also needs HA and the TV on the **same subnet / VLAN** — see the next entry.
+
+### Setup wizard loops forever — `ms.channel.timeOut` on 8002 / `ms.channel.unauthorized` on 8001
+
+Symptom: the setup wizard never completes and just loops, the TV **never shows a
+pairing / permission popup**, and the log repeats:
+
+```
+[samsungtv_smart] Try to configure SamsungTV <ip> using port 8002
+[api.samsungws] {'event': 'ms.channel.timeOut'}
+[samsungtv_smart] Try to configure SamsungTV <ip> using port 8001
+[api.samsungws] {'event': 'ms.channel.unauthorized'}
+[samsungtv_smart] Web socket connection to SamsungTV <ip> failed
+```
+
+SmartThings authentication succeeds (the TV is discovered and controllable via
+SmartThings), and a manual `curl`/`nc` to ports **8001/8002** returns an
+HTTP 101 handshake — so the ports *look* reachable. Yet the local pairing is
+refused on every authentication method (OAuth2, Integration Link, PAT) and on
+every TV model/firmware.
+
+**Cause: Home Assistant and the TV are on different subnets / VLANs.** Samsung's
+local WebSocket pairing does not work across subnets even when routing and
+firewall rules allow the traffic and the ports are reachable — the TV closes the
+connection with `timeOut`/`unauthorized` instead of prompting. This is a Samsung
+limitation, not an integration bug, and it is
+[documented for the core Samsung TV integration too](https://www.home-assistant.io/integrations/samsungtv/#subnetvlan-restrictions).
+
+**Fix (either one):**
+- Put Home Assistant and the TV on the **same subnet / VLAN**, then re-run setup.
+- If you must keep them segmented, add a **SNAT / IP‑masquerade** rule on the
+  router so traffic to the TV is presented with a source address on the TV's own
+  subnet (e.g. the router/gateway IP). On pfSense/OPNsense this is an outbound
+  NAT rule for the HA → TV flow; the pairing popup then appears and setup
+  completes. A reporter with HA on `10.x` and the TVs on `192.168.x` confirmed
+  this fixed it immediately ([#323](https://github.com/TheFab21/ha-samsungtv-smart/issues/323)).
+
+> The built-in SmartThings integration keeps working across subnets because it
+> talks to the **cloud**, not the TV's local WebSocket — so SmartThings working
+> while this integration's pairing fails is the classic signature of this issue.
 
 ### TV accepts pairing but integration shows unavailable
 
