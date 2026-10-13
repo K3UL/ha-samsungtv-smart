@@ -76,6 +76,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Thumbnails',
     ed_group_sub: 'Group by sub-folder',
     ed_group_sub_hint: 'Show a dropdown of the folder sensor\'s sub-folders. Set the sensor filter to <code>**/*</code> so it recurses. For an explicit list of folders, use the <code>folders:</code> option in YAML.',
+    ed_default_folder: 'Default folder',
+    ed_default_folder_ph: 'e.g. landscapes',
+    ed_default_folder_hint: 'Which folder / sub-folder to show first, by name. Handy for large libraries so the card does not open on "All". Needs <b>Group by sub-folder</b> above, or a <code>folders:</code> list in YAML. Leave empty to open on "All".',
     ed_server_thumbs: 'Server-side resized thumbnails',
     ed_server_thumbs_hint: 'Recommended for folders of full-size originals — sends small thumbnails to the browser instead of the multi-MB files. The full image is still used on click.',
     ed_thumb_width: 'Thumbnail width (px)',
@@ -132,6 +135,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Miniatures',
     ed_group_sub: 'Grouper par sous-dossier',
     ed_group_sub_hint: 'Affiche un menu des sous-dossiers du capteur. Mettez le filtre du capteur à <code>**/*</code> pour qu\'il soit récursif. Pour une liste explicite de dossiers, utilisez l\'option <code>folders:</code> en YAML.',
+    ed_default_folder: 'Dossier par défaut',
+    ed_default_folder_ph: 'ex. paysages',
+    ed_default_folder_hint: 'Quel dossier / sous-dossier afficher en premier, par nom. Pratique pour les grandes bibliothèques afin que la carte ne s\'ouvre pas sur « Tous ». Nécessite <b>Grouper par sous-dossier</b> ci-dessus, ou une liste <code>folders:</code> en YAML. Laissez vide pour ouvrir sur « Tous ».',
     ed_server_thumbs: 'Miniatures redimensionnées côté serveur',
     ed_server_thumbs_hint: 'Recommandé pour les dossiers d\'originaux pleine taille — envoie de petites miniatures au navigateur au lieu des fichiers de plusieurs Mo. L\'image complète est toujours utilisée au clic.',
     ed_thumb_width: 'Largeur des miniatures (px)',
@@ -188,6 +194,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Miniaturas',
     ed_group_sub: 'Agrupar por subcarpeta',
     ed_group_sub_hint: 'Muestra un desplegable con las subcarpetas del sensor. Usa el filtro <code>**/*</code> para que sea recursivo. Para una lista explícita de carpetas, usa la opción <code>folders:</code> en YAML.',
+    ed_default_folder: 'Carpeta por defecto',
+    ed_default_folder_ph: 'p. ej. paisajes',
+    ed_default_folder_hint: 'Qué carpeta / subcarpeta mostrar primero, por nombre. Útil para bibliotecas grandes para que la tarjeta no abra en «Todas». Requiere <b>Agrupar por subcarpeta</b> arriba, o una lista <code>folders:</code> en YAML. Déjalo vacío para abrir en «Todas».',
     ed_server_thumbs: 'Miniaturas redimensionadas en el servidor',
     ed_server_thumbs_hint: 'Recomendado para carpetas de originales a tamaño completo — envía miniaturas pequeñas al navegador en lugar de los archivos de varios MB. La imagen completa se sigue usando al hacer clic.',
     ed_thumb_width: 'Ancho de miniatura (px)',
@@ -244,6 +253,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Miniature',
     ed_group_sub: 'Raggruppa per sottocartella',
     ed_group_sub_hint: 'Mostra un menu a tendina delle sottocartelle del sensore. Imposta il filtro su <code>**/*</code> per la ricorsione. Per un elenco esplicito di cartelle, usa l\'opzione <code>folders:</code> in YAML.',
+    ed_default_folder: 'Cartella predefinita',
+    ed_default_folder_ph: 'es. paesaggi',
+    ed_default_folder_hint: 'Quale cartella / sottocartella mostrare per prima, per nome. Utile per librerie grandi così la scheda non si apre su «Tutte». Richiede <b>Raggruppa per sottocartella</b> sopra, o un elenco <code>folders:</code> in YAML. Lascia vuoto per aprire su «Tutte».',
     ed_server_thumbs: 'Miniature ridimensionate lato server',
     ed_server_thumbs_hint: 'Consigliato per cartelle di originali a piena risoluzione — invia piccole miniature al browser invece dei file da diversi MB. L\'immagine completa è comunque usata al clic.',
     ed_thumb_width: 'Larghezza miniatura (px)',
@@ -300,6 +312,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Miniaturas',
     ed_group_sub: 'Agrupar por subpasta',
     ed_group_sub_hint: 'Mostra um menu com as subpastas do sensor. Defina o filtro como <code>**/*</code> para recursão. Para uma lista explícita de pastas, use a opção <code>folders:</code> em YAML.',
+    ed_default_folder: 'Pasta padrão',
+    ed_default_folder_ph: 'ex. paisagens',
+    ed_default_folder_hint: 'Qual pasta / subpasta mostrar primeiro, por nome. Útil para bibliotecas grandes para que o cartão não abra em «Todas». Requer <b>Agrupar por subpasta</b> acima, ou uma lista <code>folders:</code> em YAML. Deixe vazio para abrir em «Todas».',
     ed_server_thumbs: 'Miniaturas redimensionadas no servidor',
     ed_server_thumbs_hint: 'Recomendado para pastas de originais em tamanho completo — envia miniaturas pequenas ao navegador em vez dos arquivos de vários MB. A imagem completa ainda é usada ao clicar.',
     ed_thumb_width: 'Largura da miniatura (px)',
@@ -356,6 +371,9 @@ const TRANSLATIONS = {
     ed_thumbnails: 'Bélyegképek',
     ed_group_sub: 'Csoportosítás almappa szerint',
     ed_group_sub_hint: 'Legördülő menüt jelenít meg a szenzor almappáiból. Állítsd a szűrőt <code>**/*</code> értékre a rekurzióhoz. Kifejezett mappalistához használd a <code>folders:</code> opciót YAML-ben.',
+    ed_default_folder: 'Alapértelmezett mappa',
+    ed_default_folder_ph: 'pl. tájképek',
+    ed_default_folder_hint: 'Melyik mappa / almappa jelenjen meg először, név szerint. Nagy könyvtárakhoz hasznos, hogy a kártya ne a „Mind” nézeten nyíljon. Szükséges hozzá a fenti <b>Csoportosítás almappa szerint</b>, vagy egy <code>folders:</code> lista YAML-ben. Hagyd üresen a „Mind” megnyitásához.',
     ed_server_thumbs: 'Szerveroldalon átméretezett bélyegképek',
     ed_server_thumbs_hint: 'Teljes méretű eredetiket tartalmazó mappákhoz ajánlott — kis bélyegképeket küld a böngészőnek a több MB-os fájlok helyett. A teljes kép kattintáskor továbbra is használatban marad.',
     ed_thumb_width: 'Bélyegkép szélessége (px)',
@@ -441,6 +459,24 @@ function fgcGroupBySubfolder(images, allLabel) {
   }
   return sets;
 }
+
+// Resolve a configured `default_folder` to one of the folder sets' keys, so the
+// card can open on a chosen sub-folder instead of the first set ("All", which
+// for a 2500-image library is everything). Matching is forgiving: exact key,
+// then exact label, then the last path segment of the key — all case- and
+// slash-insensitive. Returns null when nothing matches, so the caller keeps its
+// normal first-set fallback.
+function fgcResolveDefaultFolderKey(sets, wanted) {
+  if (!Array.isArray(sets) || sets.length === 0) return null;
+  const norm = (s) =>
+    String(s == null ? '' : s).trim().replace(/^\/+|\/+$/g, '').toLowerCase();
+  const w = norm(wanted);
+  if (!w) return null;
+  for (const s of sets) if (norm(s.key) === w) return s.key;
+  for (const s of sets) if (norm(s.label) === w) return s.key;
+  for (const s of sets) if (norm(String(s.key).split('/').pop()) === w) return s.key;
+  return null;
+}
 // </fgc-pure-helpers>
 
 class FolderGalleryCard extends HTMLElement {
@@ -523,6 +559,7 @@ class FolderGalleryCard extends HTMLElement {
       server_thumbnails: config.server_thumbnails !== false, // resize via integration
       thumbnail_width: config.thumbnail_width || 400,
       gallery_type: config.gallery_type || null, // auto | personal | favorites | upload
+      default_folder: config.default_folder || null, // sub-folder/name shown first
       ...config
     };
     
@@ -712,6 +749,16 @@ class FolderGalleryCard extends HTMLElement {
   updateImages() {
     if (!this._hass) return;
     this._folderSets = this._buildFolderSets();
+    // First render only (the user hasn't picked a folder yet): honour a
+    // configured default_folder so a large library opens on a chosen sub-folder
+    // instead of "All". Once the dropdown is used, _activeFolderKey is set and
+    // this is skipped, so it never overrides a manual choice.
+    if (this._activeFolderKey == null && this._config.default_folder) {
+      this._activeFolderKey = fgcResolveDefaultFolderKey(
+        this._folderSets,
+        this._config.default_folder
+      );
+    }
     const active =
       this._folderSets.find((s) => s.key === this._activeFolderKey) ||
       this._folderSets[0];
@@ -1809,6 +1856,12 @@ class FolderGalleryCardEditor extends HTMLElement {
       </div>
 
       <div class="form-row">
+        <label>${this._t('ed_default_folder')}</label>
+        <input type="text" id="default_folder" value="${fgcEscapeHtml(this._config.default_folder || '')}" placeholder="${this._t('ed_default_folder_ph')}">
+        <span class="hint">${this._t('ed_default_folder_hint')}</span>
+      </div>
+
+      <div class="form-row">
         <label>${this._t('ed_columns')}</label>
         <input type="number" id="columns" value="${this._config.columns || 4}" min="1" max="10">
       </div>
@@ -1879,6 +1932,7 @@ class FolderGalleryCardEditor extends HTMLElement {
       'image_height',
       'gallery_type',
       'group_by_subfolder',
+      'default_folder',
       'server_thumbnails',
       'thumbnail_width',
       '_tv_entity',
@@ -1907,6 +1961,7 @@ class FolderGalleryCardEditor extends HTMLElement {
     cfg.image_height = g('image_height').value || '150px';
     cfg.server_thumbnails = g('server_thumbnails').checked;
     cfg.group_by_subfolder = g('group_by_subfolder').checked || undefined;
+    cfg.default_folder = g('default_folder').value.trim() || undefined;
     cfg.thumbnail_width = parseInt(g('thumbnail_width').value, 10) || 400;
     const gt = g('gallery_type').value;
     cfg.gallery_type = gt && gt !== 'auto' ? gt : undefined;

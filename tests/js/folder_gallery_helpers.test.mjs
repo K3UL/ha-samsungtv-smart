@@ -23,10 +23,16 @@ const region = src.match(
 assert.ok(region, 'the <fgc-pure-helpers> region must exist in the card');
 
 const factory = new Function(
-  `${region[1]}\nreturn { fgcBasename, fgcRelPath, fgcSubfolder, fgcGroupBySubfolder, fgcEscapeHtml };`
+  `${region[1]}\nreturn { fgcBasename, fgcRelPath, fgcSubfolder, fgcGroupBySubfolder, fgcEscapeHtml, fgcResolveDefaultFolderKey };`
 );
-const { fgcBasename, fgcRelPath, fgcSubfolder, fgcGroupBySubfolder, fgcEscapeHtml } =
-  factory();
+const {
+  fgcBasename,
+  fgcRelPath,
+  fgcSubfolder,
+  fgcGroupBySubfolder,
+  fgcEscapeHtml,
+  fgcResolveDefaultFolderKey,
+} = factory();
 
 // fgcEscapeHtml: folder labels go into <option> text unescaped otherwise.
 assert.equal(fgcEscapeHtml('<3 & "Art"'), '&lt;3 &amp; &quot;Art&quot;');
@@ -77,5 +83,32 @@ assert.equal(sets.find((s) => s.key === 'abstract').images.length, 1);
 // Nested labels use the last path segment.
 const nested = [{ subfolder: 'nature/trees', name: 'x' }];
 assert.equal(fgcGroupBySubfolder(nested, 'All')[1].label, 'trees');
+
+// fgcResolveDefaultFolderKey: pick the starting folder set from a config value.
+// `sets` here mirrors what fgcGroupBySubfolder returns ("All" first, then subs).
+const dfSets = [
+  { key: '__all__', label: 'All', images: [] },
+  { key: 'abstract', label: 'abstract', images: [] },
+  { key: 'landscapes', label: 'landscapes', images: [] },
+  { key: 'nature/trees', label: 'trees', images: [] },
+];
+// exact key / label, case- and slash-insensitive
+assert.equal(fgcResolveDefaultFolderKey(dfSets, 'landscapes'), 'landscapes');
+assert.equal(fgcResolveDefaultFolderKey(dfSets, 'LANDSCAPES'), 'landscapes');
+assert.equal(fgcResolveDefaultFolderKey(dfSets, '/landscapes/'), 'landscapes');
+// nested: match the full path key, or just its last segment ("trees")
+assert.equal(fgcResolveDefaultFolderKey(dfSets, 'nature/trees'), 'nature/trees');
+assert.equal(fgcResolveDefaultFolderKey(dfSets, 'trees'), 'nature/trees');
+// no match / empty / missing -> null so the caller keeps its first-set fallback
+assert.equal(fgcResolveDefaultFolderKey(dfSets, 'does-not-exist'), null);
+assert.equal(fgcResolveDefaultFolderKey(dfSets, ''), null);
+assert.equal(fgcResolveDefaultFolderKey(dfSets, undefined), null);
+assert.equal(fgcResolveDefaultFolderKey([], 'landscapes'), null);
+// "folders:" list keys look like "<name>-<i>"; label is the friendly name.
+const listSets = [
+  { key: 'Favourites-0', label: 'Favourites', images: [] },
+  { key: 'Personal-1', label: 'Personal', images: [] },
+];
+assert.equal(fgcResolveDefaultFolderKey(listSets, 'Personal'), 'Personal-1');
 
 console.log('folder_gallery_helpers: all assertions passed');
