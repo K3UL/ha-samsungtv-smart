@@ -64,6 +64,17 @@
 #        group_by_subfolder: true
 #
 # The selector appears only when there is more than one folder.
+#
+# DEFAULT FOLDER (8.11): with either style above you can choose which folder
+# the card opens on, instead of "All" (handy when "All" is thousands of
+# images). Give the sub-folder / folder name (case-insensitive); the dropdown
+# still lets you switch, and "All" stays available:
+#
+#      - type: custom:folder-gallery-card
+#        title: "🎨 My Art"
+#        folder_sensor: sensor.samsung_frame_personal
+#        group_by_subfolder: true
+#        default_folder: landscapes
 
 # ============================================
 # COMPLETE DASHBOARD

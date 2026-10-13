@@ -307,6 +307,23 @@ The dropdown then lists **All** plus one entry per sub-folder, built from the
 files' paths. With neither option set the card shows a single folder and no
 dropdown, exactly as before.
 
+**Choosing which folder opens first.** By default the card opens on the first
+set — **All** — which for a large library can be thousands of images. Set
+`default_folder` to the sub-folder (or `folders:` entry) name you want shown on
+load; the dropdown still lets you switch, and **All** stays available:
+
+```yaml
+type: custom:folder-gallery-card
+title: My Art
+folder_sensor: sensor.frame_personal
+group_by_subfolder: true
+default_folder: landscapes
+```
+
+The match is case-insensitive and accepts either a sub-folder's name
+(`landscapes`) or a nested path (`nature/trees`). If it matches nothing the card
+falls back to **All**.
+
 ### All Configuration Options
 
 | Option | Type | Default | Description |
@@ -316,6 +333,7 @@ dropdown, exactly as before.
 | `folder` | string | *(auto)* | Base **URL** for thumbnails (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when under `/config/www/`. Does **not** provide the image list (a sensor or `image_list` does). A `/config/www/...` value is accepted and mapped to `/local/...`. |
 | `folders` | list | - | A list of selectable folders, shown as a dropdown. Each entry has a `name` (the label) and the same source keys as the card (`folder_sensor` / `sensor` / `folder` / `image_list`). |
 | `group_by_subfolder` | boolean | `false` | With a single (recursive) `folder_sensor`, show a dropdown of its sub-folders (**All** + one per sub-folder) instead of a flat list. |
+| `default_folder` | string | *(All)* | Which folder/sub-folder the card opens on, by name (case-insensitive; a nested path like `nature/trees` also works). Requires `group_by_subfolder` or a `folders:` list. The dropdown still switches freely and **All** stays available. No match → opens on **All**. |
 | `columns` | number | `4` | Number of columns |
 | `image_height` | string | `150px` | Image height (ignored if `aspect_ratio` set) |
 | `aspect_ratio` | string | - | Aspect ratio (e.g., `1`, `16/9`, `3/4`) |
