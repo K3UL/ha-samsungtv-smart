@@ -144,6 +144,31 @@ ART_WS_WEDGE_RECURRENCE_WINDOW = 900.0
 # so it still recovers — within this window of its last event.
 ART_WS_EVENT_LIVENESS_WINDOW = 180.0
 
+# The window above assumes a channel that answers reads *and* pushes events, so
+# 3 minutes of event silence while reads time out is suspicious. A channel that
+# has pushed events but has never once answered a read since connecting is the
+# broadcast-only 0.97 Frame instead: its reads time out by design, so a read
+# timeout carries no information about the app's health, and reconnecting only
+# costs the broadcasts the Art Mode switch depends on. Such a set also
+# broadcasts rarely — only on an actual transition — so a quiet stretch is
+# normal: measured 6 min between two art_mode_changed events, and a 3rd read
+# timeout 195 s after the last one, just past the window above, which tripped
+# the breaker and left Art Mode unknown (#326). Give it a much longer stretch
+# of silence before declaring the app dead; a true zombie pushes nothing at
+# all, so it still recovers once this elapses.
+ART_WS_BROADCAST_ONLY_LIVENESS_WINDOW = 900.0
+
+# When the receive loop ends, the cached art_mode is dropped so a dead channel
+# cannot keep reporting a stale "on" (Art Mode being a Frame's last state
+# before power-off). That fall-through assumes some independent source — IP
+# Control, SmartThings, a meaningful REST PowerState — can supply the real
+# value instead. A local-only 0.97 Frame has none, so art_mode_status simply
+# vanished and the switch and sensor went unknown the moment the channel
+# blipped, even though it reconnected a second later (#326). Keep the last
+# value this long across a drop so a short reconnect is invisible, then let it
+# expire so a genuine power-off is not pinned "on" indefinitely.
+ART_WS_STATE_RETENTION = 120.0
+
 # Samsung firmware can leave a WebSocket transport half-open indefinitely.
 # Integration unload (and therefore Home Assistant shutdown/restart) must not
 # wait forever for aiohttp's close handshake.
@@ -263,8 +288,10 @@ class SamsungTVAsyncArt:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._art_uuid: str = str(uuid.uuid4())
 
-        # State
-        self.art_mode: bool | None = None
+        # State. art_mode is exposed as a property so a value kept across a
+        # channel drop can expire on its own (ART_WS_STATE_RETENTION).
+        self._art_mode: bool | None = None
+        self._art_mode_retained_until: float | None = None
         # art_mode_changed broadcasts, numbered as they arrive, and the number
         # of the latest one per state. The switch's write guard confirms a
         # write by a broadcast of the requested state that arrived AFTER the
@@ -317,6 +344,12 @@ class SamsungTVAsyncArt:
         # times out. When a wedge trips with this still False, the port is a
         # zombie and _note_request_timeout flips to the alternate one (#12).
         self._got_response_since_connect = False
+        # Narrower than the flag above, which any pushed event also sets: True
+        # only once a request/response READ has been answered on this
+        # connection. That is what tells a Frame whose reads work apart from a
+        # broadcast-only 0.97 set, whose reads never answer — see
+        # ART_WS_BROADCAST_ONLY_LIVENESS_WINDOW (#326).
+        self._answered_request_since_connect = False
         # When the TV last pushed us any art message (a broadcast or a request
         # reply). Proof the art app is alive even when request/response reads
         # time out, used to hold off the wedge breaker on a 0.97 Frame (#315).
@@ -423,6 +456,31 @@ class SamsungTVAsyncArt:
         looping over many requests (thumbnail batch) should pause, not plough on.
         """
         return max(0.0, self._request_cooldown_until - time.monotonic())
+
+    @property
+    def art_mode(self) -> bool | None:
+        """Cached Art Mode state, or None when it is not known.
+
+        Normally written by the art_mode_changed broadcast. After the channel
+        drops, the last value is kept for ART_WS_STATE_RETENTION so a brief
+        reconnect does not blank Art Mode on a set whose only source is this
+        channel; once that elapses it reverts to None and the consumers fall
+        back to their independent sources.
+        """
+        if (
+            self._art_mode_retained_until is not None
+            and time.monotonic() >= self._art_mode_retained_until
+        ):
+            self._art_mode = None
+            self.art_mode_last_broadcast = None
+            self._art_mode_retained_until = None
+        return self._art_mode
+
+    @art_mode.setter
+    def art_mode(self, value: bool | None) -> None:
+        self._art_mode = value
+        # A value observed on a live channel is current, not on borrowed time.
+        self._art_mode_retained_until = None
 
     def register_capability_callback(self, func) -> None:
         """Register a callback fired when a get-capability is first learned.
@@ -765,6 +823,7 @@ class SamsungTVAsyncArt:
             # before anything does, this port is a zombie (see
             # _note_request_timeout) and we flip to the alternate one.
             self._got_response_since_connect = False
+            self._answered_request_since_connect = False
 
             # Start the receive loop
             self._recv_task = asyncio.create_task(self._receive_loop())
@@ -963,17 +1022,24 @@ class SamsungTVAsyncArt:
                 self._connected = False
                 self._ws = None
                 self._recv_task = None
-                # Invalidate the cached art_mode: the channel that keeps it
-                # live is gone, so the last value (typically "on", since Art
-                # Mode is a Frame's last state before power-off) is now stale
-                # and must not keep being reported. Resetting to None makes
-                # _art_mode_is_on() fall through to the independent power
-                # sources (IP Control / SmartThings / REST PowerState) instead
-                # of pinning a false "on". A reconnect restores the real value
-                # from the first event received. The last broadcast goes with
-                # it: it described a channel that is now dead.
-                self.art_mode = None
-                self.art_mode_last_broadcast = None
+                # The channel that keeps art_mode live is gone, so the last
+                # value (typically "on", since Art Mode is a Frame's last state
+                # before power-off) must not be reported indefinitely:
+                # _art_mode_is_on() has to fall through to the independent
+                # power sources (IP Control / SmartThings / REST PowerState)
+                # rather than pin a false "on". But dropping it instantly blanks
+                # Art Mode on a set that has no such source — a local-only 0.97
+                # Frame, where this channel is the only truth — even when the
+                # reconnect lands a second later (#326). So start the retention
+                # clock instead: the value (and the broadcast that justifies it)
+                # survives a brief drop and expires on its own if the channel
+                # stays down. A reconnect refreshes it from the first event.
+                if self._art_mode is None:
+                    self.art_mode_last_broadcast = None
+                else:
+                    self._art_mode_retained_until = (
+                        time.monotonic() + ART_WS_STATE_RETENTION
+                    )
                 # Fail in-flight pending requests immediately rather than
                 # letting their callers block on the per-request timeout;
                 # the response will never arrive on this dead channel.
@@ -1192,6 +1258,9 @@ class SamsungTVAsyncArt:
             # cycles that never got an answer (#273).
             self._timeout_streak = 0
             self._got_response_since_connect = True
+            # This one is a READ that answered, which a pushed event is not:
+            # it rules out the broadcast-only 0.97 Frame (#326).
+            self._answered_request_since_connect = True
             self._unproductive_cycles = 0
             # First real answer on this port proves it: settle it and persist
             # it. Persisting here rather than on a speculative switch means the
@@ -1257,15 +1326,22 @@ class SamsungTVAsyncArt:
         # while the app is proving itself alive; a truly dead app pushes nothing
         # and still trips once this window of silence elapses.
         last_event = self._last_event_at
-        if (
-            last_event is not None
-            and time.monotonic() - last_event <= ART_WS_EVENT_LIVENESS_WINDOW
-        ):
+        # A channel that has never answered a read is broadcast-only by design,
+        # so its read timeouts are not evidence of a dead app and it may stay
+        # quiet far longer between transitions (#326).
+        liveness_window = (
+            ART_WS_EVENT_LIVENESS_WINDOW
+            if self._answered_request_since_connect
+            else ART_WS_BROADCAST_ONLY_LIVENESS_WINDOW
+        )
+        if last_event is not None and time.monotonic() - last_event <= liveness_window:
             self._log.debug(
                 "Art API: %d request timeouts but the channel is still pushing "
-                "events (%.0fs ago) — not reconnecting",
+                "events (%.0fs ago, window %.0fs%s) — not reconnecting",
                 self._timeout_streak,
                 time.monotonic() - last_event,
+                liveness_window,
+                "" if self._answered_request_since_connect else ", broadcast-only",
             )
             self._timeout_streak = 0
             return
