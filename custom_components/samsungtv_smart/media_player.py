@@ -653,8 +653,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._attr_is_volume_muted = False
         self._attr_volume_level = 0.0
 
-        # Device information from TV
+        # Device information from TV, and when it was last read (monotonic).
         self._device_info: dict[str, Any] | None = None
+        self._device_info_at: float | None = None
 
         # Save a reference to the imported config
         self._broadcast = config.get(CONF_BROADCAST_ADDRESS)
@@ -2454,6 +2455,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     (device_info.get("device") or {}).get("PowerState"),
                 )
             self._device_info = device_info
+            # When this reading was taken. PowerState is a snapshot like the IP
+            # Control ones, so _art_mode_is_on() can weigh an art_mode_changed
+            # broadcast against it (_art_broadcast_overrides) instead of
+            # trusting a 'standby' that predates the broadcast (#326).
+            self._device_info_at = time.monotonic()
         except Exception as ex:  # pylint: disable=broad-except
             # %r: a timeout's str() is empty, which left "...on <host>: ".
             self._log.debug("Error retrieving device info on %s: %r", self._host, ex)
@@ -3195,7 +3201,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             )
             return panel_art if override is None else override
         if self._get_device_spec("PowerState") == "standby":
-            return False
+            # Like the IP Control readings above, this is a snapshot and can
+            # trail the TV's own art_mode_changed announcement. On a Frame with
+            # IP Control the broadcast already outranks a stale reading; a
+            # local-only set (no IP Control, no SmartThings) used to fall
+            # straight through to this `return False`, so a 'standby' polled
+            # moments after an art_mode_changed='on' flipped Art Mode off
+            # (#326: broadcast 'on' at 10:42:37.634, PowerState='standby' read
+            # at 10:42:37.919, switch and media_player went off). 2019/0.97
+            # Frames report 'standby' *while* displaying art, so the reading
+            # alone cannot mean "art is off". Past ART_BROADCAST_GRACE the
+            # reading is the authority again, which keeps a genuine power-off
+            # from being pinned "on" by an old broadcast.
+            override = self._art_broadcast_overrides(self._device_info_at)
+            if override is None:
+                return False
+            return override
         # Cloud power-off fallback for TVs without IP Control. SmartThings
         # reports the switch capability as 'on' while the Frame is in Art Mode
         # and 'off' only when it is truly powered off, so STATE_OFF means the

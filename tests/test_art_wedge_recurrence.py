@@ -84,6 +84,12 @@ class _Channel(art.SamsungTVAsyncArt):
         self._recurring_wedges = 0
         self._last_wedge_at = None
         self._got_response_since_connect = True
+        # No unsolicited event has been seen, so the event-liveness guard
+        # (#315) never holds the breaker off and these cases exercise the
+        # escalation itself. A channel that HAS answered a read is also not the
+        # broadcast-only 0.97 Frame that gets the longer window (#326).
+        self._last_event_at = None
+        self._answered_request_since_connect = True
         self._proven_port = 8002
         self._port = 8002
 
