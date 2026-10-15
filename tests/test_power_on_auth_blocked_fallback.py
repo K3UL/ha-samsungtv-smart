@@ -141,6 +141,24 @@ async def test_ip_control_falls_back_to_wol_when_the_client_refuses():
     assert await _wol_sent(device)  # a dead IP client still wakes the TV
 
 
+# --- A configured method with nothing to send it must say so ---------------
+
+
+async def test_smartthings_without_a_connection_warns_and_falls_back_to_wol():
+    # Power on method = SmartThings but the entry has no SmartThings client
+    # (never linked, or unlinked since). This used to fall through silently,
+    # so a debug log showed no wake attempt at all and the dead setting stayed
+    # invisible — two captures on #319 could not be told apart because of it.
+    device = _device(method=PowerOnMethod.SmartThings, st=False, key_power_sent=True)
+
+    await device._async_power_on()
+
+    assert await _wol_sent(device)  # an explicit fallback, not nothing
+    warnings = " ".join(str(c.args[0]) for c in device._log.warning.call_args_list)
+    assert "no SmartThings connection" in warnings
+    assert "re-authorise" in warnings
+
+
 # --- #12/#273: an auth-blocked channel still reaches the wake method --------
 
 

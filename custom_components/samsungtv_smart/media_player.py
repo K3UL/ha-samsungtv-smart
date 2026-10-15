@@ -3417,6 +3417,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 self._log.error("Error sending WOL packet: %s", exc)
                 return False
 
+        # A successful send used to log nothing at all, so a debug capture
+        # could not show whether WOL had been attempted (#319). The packet is
+        # fire-and-forget — this records that it left, not that the TV woke.
+        if send_success:
+            self._log.debug(
+                "WOL packet sent to %s via %s (%s time(s))",
+                self._mac,
+                ip_address,
+                wol_repeat,
+            )
+
         return send_success
 
     async def _async_power_on(self, set_art_mode=False):
@@ -3489,11 +3500,37 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # that may or may not have landed is safe. WOL stays the default and is
         # used only when KEY_POWER could not be sent (an auth-blocked or
         # disconnected channel, #12/#273) — that historical path is unchanged.
+        # Say which method is about to run. Without this the wake path is
+        # invisible in a debug log: a skipped branch logs nothing, and a
+        # successful WOL logs nothing either, so two debug captures from the
+        # same reporter could not establish whether the configured wake had
+        # even been attempted (#319).
+        self._log.debug(
+            "Power on %s: method=%s, KEY_POWER %s",
+            self._host,
+            turn_on_method.name,
+            "sent" if key_power_sent else "not sent",
+        )
         if turn_on_method == PowerOnMethod.SmartThings and self._st:
+            self._log.debug("Power on %s: sending SmartThings wake", self._host)
             await self._st.async_turn_on()
+        elif turn_on_method == PowerOnMethod.SmartThings:
+            # Configured for SmartThings with no client to send it: the entry
+            # has no SmartThings/OAuth credential (never linked, or unlinked
+            # since). Silently falling through to WOL hid a dead "Power on
+            # method" setting, so say it outright — WOL below is a fallback,
+            # not what the user asked for.
+            self._log.warning(
+                "Power on %s: method is SmartThings but this entry has no "
+                "SmartThings connection — re-authorise it in the integration "
+                "options, or pick another Power on method. Falling back to WOL",
+                self._host,
+            )
+            result = await self.hass.async_add_executor_job(self._send_wol_packet)
         elif turn_on_method == PowerOnMethod.IPControl:
             ip_client = self._get_ip_control_client()
             if ip_client is not None:
+                self._log.debug("Power on %s: sending IP Control wake", self._host)
                 try:
                     await ip_client.async_power_on()
                 except SamsungIPControlError as ex:
@@ -3507,9 +3544,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         self._send_wol_packet
                     )
             else:
+                self._log.debug(
+                    "Power on %s: method is IP Control but no client is "
+                    "available; falling back to WOL",
+                    self._host,
+                )
                 result = await self.hass.async_add_executor_job(self._send_wol_packet)
         elif not key_power_sent:
             result = await self.hass.async_add_executor_job(self._send_wol_packet)
+        else:
+            # KEY_POWER landed on a live channel and WOL is the default: the
+            # key is the wake. Noted so the log never just stops here.
+            self._log.debug(
+                "Power on %s: KEY_POWER was sent on a live channel; no "
+                "further wake needed",
+                self._host,
+            )
 
         if result:
             self._state = MediaPlayerState.OFF
