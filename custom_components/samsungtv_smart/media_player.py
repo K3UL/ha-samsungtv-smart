@@ -852,12 +852,38 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._st_api_key = config.get(CONF_API_KEY)
         device_id = config.get(CONF_DEVICE_ID)
 
-        # For OAuth method, get token from oauth_token if api_key is not set
-        if auth_method == AUTH_METHOD_OAUTH and not self._st_api_key:
+        # When OAuth is the chosen auth method, the OAuth token is the
+        # credential to use: it is the one api_key_callback keeps refreshed.
+        # A Personal Access Token left in the API-key field — from an earlier
+        # PAT setup, or pasted in later — used to take precedence over it, so a
+        # stale or revoked PAT silently broke every SmartThings call while the
+        # OAuth link looked perfectly healthy in the UI. A power-on configured
+        # for SmartThings then had no working client and did nothing (#319).
+        # Prefer the OAuth token, fall back to the PAT only when OAuth carries
+        # no access token, and say when both are present so the ambiguity is
+        # visible instead of silent.
+        if auth_method == AUTH_METHOD_OAUTH:
             oauth_token = config.get(CONF_OAUTH_TOKEN)
-            if oauth_token and isinstance(oauth_token, dict):
-                self._st_api_key = oauth_token.get("access_token")
+            oauth_access = (
+                oauth_token.get("access_token")
+                if isinstance(oauth_token, dict)
+                else None
+            )
+            if oauth_access:
+                if self._st_api_key and self._st_api_key != oauth_access:
+                    self._log.warning(
+                        "Both an OAuth token and a SmartThings PAT are "
+                        "configured; using the OAuth token. Clear the PAT "
+                        "field in the integration options to remove the "
+                        "ambiguity"
+                    )
+                self._st_api_key = oauth_access
                 self._log.debug("Using OAuth access token for SmartThings API")
+            elif self._st_api_key:
+                self._log.debug(
+                    "OAuth is configured but carries no access token; "
+                    "falling back to the configured PAT"
+                )
 
         if self._st_api_key and device_id:
             # Use callback for both ST_ENTRY and OAuth methods
