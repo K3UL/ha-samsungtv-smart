@@ -1,17 +1,21 @@
-"""With OAuth chosen, the OAuth token must win over a leftover PAT (#319).
+"""An OAuth entry must use the live token, not its frozen snapshot (#319).
 
 A reporter had Power on method = SmartThings, an OAuth link the UI showed as
-healthy, and Art Mode failing to wake the TV from fully off. Two debug logs
-carried no SmartThings command at all. The credential selection explains it:
-the API-key field (labelled "SmartThings Personal Access Token (PAT)") was
-read first and the OAuth token used only when that field was empty, so a PAT
-left over from an earlier setup — stale or revoked — took precedence over the
-token the refresh callback actually keeps alive. SmartThings then had no
-usable credential while everything looked fine.
+healthy, and Art Mode failing to wake the TV from fully off — but only after
+the first day. Two debug logs carried no SmartThings command at all.
 
-The OAuth token now wins when OAuth is the chosen method, the PAT remains the
-fallback when OAuth carries no access token, and holding both is reported
-instead of silently resolved.
+The cause is that CONF_API_KEY is not a user-supplied PAT on an OAuth entry:
+the OAuth flow writes token["access_token"] into it, so it is a SNAPSHOT from
+when the entry was created or reconfigured. CONF_OAUTH_TOKEN is the live
+credential, kept refreshed by api_key_callback; Samsung's access tokens expire
+in about a day. Reading the snapshot first meant the frozen value was used
+forever after the first rotation, every cloud call failed on it, and a cold
+power-on set to SmartThings found no usable client and did nothing.
+
+The live OAuth token now wins. The stored key stays the fallback for an entry
+whose OAuth token carries no access_token, and a superseded snapshot is noted
+at debug — not warned about, since the flow itself writes it and every OAuth
+entry has one.
 
 media_player.py needs Home Assistant to import, so the selection block is
 extracted from the real source and executed here: the test fails if that code
@@ -70,21 +74,24 @@ def _select(*, pat, oauth_token, auth_method=OAUTH):
     return namespace["store"].get("key"), log
 
 
-class OAuthWinsOverALeftoverPatTest(unittest.TestCase):
-    def test_the_oauth_token_is_used_when_a_stale_pat_is_also_present(self):
-        # The reported setup: OAuth re-authorised, an old PAT still in the box.
-        key, log = _select(pat="stale-pat", oauth_token={"access_token": "fresh"})
+class TheLiveTokenWinsOverTheSnapshotTest(unittest.TestCase):
+    def test_the_live_token_is_used_when_the_stored_snapshot_is_stale(self):
+        # The reported setup: the snapshot froze a day ago, the token rotated.
+        key, log = _select(pat="old-snapshot", oauth_token={"access_token": "fresh"})
 
         self.assertEqual(key, "fresh")
 
-    def test_holding_both_is_reported_not_resolved_in_silence(self):
-        _, log = _select(pat="stale-pat", oauth_token={"access_token": "fresh"})
+    def test_a_superseded_snapshot_is_noted_at_debug_not_warned_about(self):
+        # Every OAuth entry carries a stored key, because the flow writes the
+        # access token into it. A refresh making it differ is routine, so it
+        # must not raise a warning telling the user to clear a field the
+        # integration fills itself.
+        _, log = _select(pat="old-snapshot", oauth_token={"access_token": "fresh"})
 
-        self.assertEqual(len(log.warnings), 1)
-        warning = log.warnings[0]
-        self.assertIn("OAuth token and a SmartThings PAT", warning)
-        self.assertIn("using the OAuth token", warning)
-        self.assertIn("Clear the PAT", warning)
+        self.assertEqual(log.warnings, [])
+        self.assertTrue(
+            any("older OAuth snapshot" in line for line in log.debugs), log.debugs
+        )
 
     def test_an_oauth_token_alone_is_used_without_any_warning(self):
         key, log = _select(pat=None, oauth_token={"access_token": "fresh"})
@@ -92,16 +99,16 @@ class OAuthWinsOverALeftoverPatTest(unittest.TestCase):
         self.assertEqual(key, "fresh")
         self.assertEqual(log.warnings, [])
 
-    def test_a_pat_matching_the_oauth_token_is_not_worth_a_warning(self):
-        # An entry whose PAT field was filled from the same OAuth token is not
-        # an ambiguity to complain about.
+    def test_a_snapshot_still_equal_to_the_live_token_is_silent(self):
+        # Just after authorising, the stored key and the live token match.
         key, log = _select(pat="fresh", oauth_token={"access_token": "fresh"})
 
         self.assertEqual(key, "fresh")
         self.assertEqual(log.warnings, [])
+        self.assertFalse(any("older OAuth snapshot" in line for line in log.debugs))
 
 
-class ThePatRemainsTheFallbackTest(unittest.TestCase):
+class TheStoredKeyRemainsTheFallbackTest(unittest.TestCase):
     def test_a_pat_is_used_when_oauth_carries_no_access_token(self):
         key, _ = _select(pat="only-pat", oauth_token={"refresh_token": "r"})
 
@@ -117,7 +124,10 @@ class ThePatRemainsTheFallbackTest(unittest.TestCase):
         _, log = _select(pat="only-pat", oauth_token=None)
 
         self.assertTrue(
-            any("falling back to the configured PAT" in line for line in log.debugs),
+            any(
+                "falling back to the stored SmartThings key" in line
+                for line in log.debugs
+            ),
             log.debugs,
         )
 
