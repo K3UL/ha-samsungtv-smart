@@ -852,16 +852,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._st_api_key = config.get(CONF_API_KEY)
         device_id = config.get(CONF_DEVICE_ID)
 
-        # When OAuth is the chosen auth method, the OAuth token is the
-        # credential to use: it is the one api_key_callback keeps refreshed.
-        # A Personal Access Token left in the API-key field — from an earlier
-        # PAT setup, or pasted in later — used to take precedence over it, so a
-        # stale or revoked PAT silently broke every SmartThings call while the
-        # OAuth link looked perfectly healthy in the UI. A power-on configured
-        # for SmartThings then had no working client and did nothing (#319).
-        # Prefer the OAuth token, fall back to the PAT only when OAuth carries
-        # no access token, and say when both are present so the ambiguity is
-        # visible instead of silent.
+        # On an OAuth entry, CONF_API_KEY is not a user-supplied PAT: the OAuth
+        # flow writes the access token into it (config_flow sets _api_key from
+        # token["access_token"]), so it is a SNAPSHOT taken when the entry was
+        # created or reconfigured. CONF_OAUTH_TOKEN is the live credential —
+        # api_key_callback / _update_smartthing_token keep its access_token
+        # refreshed, and Samsung's expire in about a day.
+        #
+        # Reading the snapshot first therefore broke SmartThings as soon as the
+        # token first rotated: the frozen value was used forever after, every
+        # cloud call failed on it, and because the client is only built from a
+        # key it could not tell was dead, a cold power-on set to SmartThings
+        # found no client and did nothing at all (#319 — it worked right after
+        # authorising and stopped a day later). Prefer the live token; keep the
+        # stored key only as the fallback for an entry whose OAuth token
+        # carries no access_token (and for PAT entries, which never get here).
         if auth_method == AUTH_METHOD_OAUTH:
             oauth_token = config.get(CONF_OAUTH_TOKEN)
             oauth_access = (
@@ -871,18 +876,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             )
             if oauth_access:
                 if self._st_api_key and self._st_api_key != oauth_access:
-                    self._log.warning(
-                        "Both an OAuth token and a SmartThings PAT are "
-                        "configured; using the OAuth token. Clear the PAT "
-                        "field in the integration options to remove the "
-                        "ambiguity"
+                    # Expected after any refresh — the snapshot is simply old.
+                    self._log.debug(
+                        "Stored SmartThings key is an older OAuth snapshot; "
+                        "using the current OAuth access token"
                     )
                 self._st_api_key = oauth_access
                 self._log.debug("Using OAuth access token for SmartThings API")
             elif self._st_api_key:
                 self._log.debug(
                     "OAuth is configured but carries no access token; "
-                    "falling back to the configured PAT"
+                    "falling back to the stored SmartThings key"
                 )
 
         if self._st_api_key and device_id:
