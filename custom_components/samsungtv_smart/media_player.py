@@ -305,6 +305,15 @@ IP_ART_MODE_MAX_FAILURES = 3
 # Frame's getTVStates had not reached "Ambient" 11 s after it broadcast ON; the
 # switch gives the panel the same 20 s (ART_MODE_PANEL_CONFLICT_WINDOW).
 ART_BROADCAST_GRACE = 20.0
+# How long device info has to go unanswered, on a TV we do not believe to be
+# on, before the set counts as off the network entirely (seconds). A Frame
+# displaying artwork is powered up and answers the REST endpoint — the #326
+# capture has it reporting PowerState 'standby' and then 'on' right through a
+# seven-minute art session — so a set that has stopped answering for this long
+# is not showing art, whatever the art channel last announced. 12 poll cycles
+# at the default 5 s scan interval: long enough that a brief network hiccup
+# does not unsee a real Art Mode, and it clears on the first answered read.
+ART_UNREACHABLE_WINDOW = 60.0
 # Device identity (model / firmware) is fetched via IP Control once at startup
 # and then re-checked on this cadence, so a firmware upgrade is picked up
 # without re-pairing. It is a get-only LAN call and the value rarely changes,
@@ -3120,6 +3129,29 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         )
         return getattr(art_api, "art_mode_last_broadcast", None)
 
+    def _device_info_unreachable(self) -> bool:
+        """Whether this TV has gone silent on device info long enough to be off.
+
+        ``_check_status`` force-reads device info on every poll for any TV that
+        reports PowerState, with a short timeout while the set is believed off
+        (POWER_PROBE_OFF_TIMEOUT). ``_async_load_device_info`` stamps
+        ``_device_info_at`` only when that read is answered, so the age of that
+        stamp is how long the REST endpoint has been unreachable.
+
+        Gated three ways, because a stale stamp on its own proves nothing:
+        while we believe the TV is on the probe is answering by definition; a
+        TV that has never answered has no baseline to measure from; and a TV
+        whose device info carries no PowerState is not probed on this path at
+        all, so its stamp ages for an unrelated reason.
+        """
+        if self._state == MediaPlayerState.ON:
+            return False
+        if self._device_info_at is None:
+            return False
+        if self._get_device_spec("PowerState") is None:
+            return False
+        return time.monotonic() - self._device_info_at > ART_UNREACHABLE_WINDOW
+
     def _art_broadcast_overrides(self, observed_at: float | None) -> bool | None:
         """The broadcast art state, when it outranks a reading taken at observed_at.
 
@@ -3144,6 +3176,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         reading stands — when there is no broadcast or the reading carries no
         time (a powerOff, which nothing overrides). Only broadcasts count: a
         get_artmode_status reply can be the stale latch of #273.
+
+        The window is bounded in wall-clock terms as well, because comparing
+        the two timestamps alone assumes the reading keeps being refreshed.
+        When it stops, "newer than the last reading" stays true forever:
+        _async_load_device_info only stamps _device_info_at on success, so a TV
+        that drops off the network freezes it and every later broadcast
+        outranks it for good. Measured on the #326 Frame: real standby at
+        22:50:14 announced itself as go_to_standby + art_mode_changed='on'
+        (the TV sends that same pair when *entering* Art Mode), REST then timed
+        out on every poll, and the last reading — PowerState='standby' from
+        22:44:54 — stayed frozen behind the broadcast. Art Mode read 'on' with
+        the panel dark until REST answered again at 22:54:02, nearly four
+        minutes later. Past the grace period a broadcast is no longer the
+        newer word on a reading that simply is not coming, so it stops
+        overriding and the frozen reading is allowed to stand.
         """
         if observed_at is None:
             return None
@@ -3152,6 +3199,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return None
         art_on, heard_at = broadcast
         if observed_at >= heard_at + ART_BROADCAST_GRACE:
+            return None
+        if time.monotonic() >= heard_at + ART_BROADCAST_GRACE:
             return None
         return art_on
 
@@ -3280,6 +3329,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if override is None:
                 return False
             return override
+        if self._device_info_unreachable():
+            # Nothing above could decide, so what is left is the art channel's
+            # own cache — and that cache is what a Frame latches on when it
+            # announces a real standby as art_mode_changed='on'. A set that has
+            # stopped answering device info for ART_UNREACHABLE_WINDOW while we
+            # do not believe it to be on is off the network, and a panel
+            # displaying artwork is not. So the cache does not get to assert
+            # 'on' here (#326: after the 22:50:14 standby the cached 'on'
+            # survived four minutes, and the switch came back on at 22:54:04
+            # off the strength of it alone).
+            return False
         art_api = (
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
