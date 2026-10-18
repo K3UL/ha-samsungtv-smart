@@ -656,6 +656,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # Device information from TV, and when it was last read (monotonic).
         self._device_info: dict[str, Any] | None = None
         self._device_info_at: float | None = None
+        # When the SmartThings state was last refreshed (monotonic).
+        self._st_state_at: float | None = None
 
         # Save a reference to the imported config
         self._broadcast = config.get(CONF_BROADCAST_ADDRESS)
@@ -2620,6 +2622,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return False
 
         self._st_last_exc = None
+        # When this cloud reading was taken. Like the IP Control snapshots and
+        # device_info, the SmartThings state describes the TV as of the moment
+        # the cloud answered, so _art_mode_is_on() can weigh an art_mode_changed
+        # broadcast against it instead of trusting a reading the panel has
+        # already moved past (#12).
+        self._st_state_at = time.monotonic()
         if self._st_auth_error_count:
             self._log.info(
                 "%s - SmartThings is answering again, resuming normal polling",
@@ -3256,7 +3264,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # into Art Mode may briefly read 'off' until the cloud catches up — far
         # better than a permanently stuck 'on'.
         if self._st is not None and self._st.state == STStatus.STATE_OFF:
-            return False
+            # ...but the cloud lags, and the comment above calls that out: a TV
+            # powered straight on into Art Mode reads 'off' until SmartThings
+            # catches up. When the art channel has announced the transition
+            # since this reading was taken, that broadcast is the newer and
+            # more local word and must win — exactly as it does over the IP
+            # Control snapshots and PowerState above. Measured on a 2020 Frame
+            # with no IP Control paired (#12): local power-on at 13:23:03,
+            # SmartThings still STATE_OFF at 13:23:08, art_mode_changed='on' at
+            # 13:23:10 — yet art_mode_status read off for the next 48 s while
+            # the panel displayed art, and the switch flipped itself back off.
+            # Past ART_BROADCAST_GRACE the cloud is the authority again, so a
+            # real power-off the art channel never witnessed is still caught.
+            override = self._art_broadcast_overrides(self._st_state_at)
+            if override is None:
+                return False
+            return override
         art_api = (
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
@@ -4303,6 +4326,23 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         The ambiguous case still sends the key, so nothing that used to work
         stops working — this only removes the provably redundant write.
         """
+        # A Frame in Art Mode locks its picture mode (it reports "Naturale" /
+        # Natural and ignores any change), so writing one is futile while art
+        # is on. Attempting it anyway burned the whole verify-and-fallback
+        # chain for nothing: SmartThings answered COMPLETED on two argument
+        # forms, each verify read back the locked mode, samsungvd.pictureMode
+        # returned 422, and the user got three warnings per attempt about a TV
+        # that was behaving normally (#12 — measured twice in 26 s). Say it
+        # once, at info, and leave the setting alone.
+        if self._art_mode_is_on() is True:
+            self._log.info(
+                "Not setting picture mode '%s' on %s: the TV locks its "
+                "picture mode while Art Mode is on. Leave Art Mode first.",
+                picture_mode,
+                self._host,
+            )
+            return
+
         applied = False
         if self._st:
             try:
