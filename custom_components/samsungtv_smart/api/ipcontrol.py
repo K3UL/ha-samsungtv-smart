@@ -28,6 +28,9 @@ loads CA certs from disk, which would block the event loop if done at __init__.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 import http.client
 import json
 import logging
@@ -45,14 +48,99 @@ _LOGGER = logging.getLogger(__name__)
 # art poll, the state coordinators, the backlight/picture number sliders and
 # the color-tone select trample each other. Keyed by host so multiple TVs stay
 # independent. Created lazily on the running loop.
-_HOST_LOCKS: dict[str, asyncio.Lock] = {}
+_HOST_LOCKS: dict[str, _HostGate] = {}
+
+# Set for the duration of a user-initiated operation (see priority_requests).
+# Every IP Control call made inside it jumps ahead of the background polls
+# queued on the host gate. A ContextVar rather than an argument because the
+# operation spans several calls across two modules — a write is typically a
+# panel check, the write itself and a panel read-back — and all of them have
+# to overtake the queue for the sequence to fit in its caller's budget.
+_PRIORITY_REQUEST: ContextVar[bool] = ContextVar(
+    "samsungtv_ip_priority_request", default=False
+)
 
 
-def _host_lock(host: str) -> asyncio.Lock:
-    """Return the shared serialization lock for one TV host."""
+@contextmanager
+def priority_requests() -> Iterator[None]:
+    """Mark everything done in this block as user-initiated.
+
+    Background polls stand aside for it on the host gate. Use it for an action
+    the user is waiting on — never for a periodic refresh, which would defeat
+    the point.
+    """
+    token = _PRIORITY_REQUEST.set(True)
+    try:
+        yield
+    finally:
+        _PRIORITY_REQUEST.reset(token)
+
+
+class _HostGate:
+    """Serializes calls to one TV, letting user-initiated ones go first.
+
+    A plain lock is FIFO, so a write landed behind every poll already queued
+    and waited for all of them. Measured on a 2022 Frame woken by an external
+    IR blaster (#319): the coordinators' own refreshes took 14.5 s, 28 s and
+    36 s while the Art Mode switch allows each attempt 10 s, so all three
+    attempts expired inside the pre-write panel read and the write was never
+    issued.
+
+    So waiters are not a queue but a two-class priority queue, FIFO within a
+    class. A priority caller waits only for the request already on the wire —
+    bounded by CMD_TIMEOUT — however deep the backlog behind it. Writes are
+    user-initiated and rare, so the polls they overtake lose a tick, not their
+    turn; nothing here waits on a background caller, so a write cannot be
+    deadlocked by one.
+    """
+
+    def __init__(self) -> None:
+        self._busy = False
+        # (class, arrival, waiter): class 0 is user-initiated, 1 background.
+        self._waiters: list[tuple[int, int, asyncio.Future]] = []
+        self._arrivals = 0
+
+    @asynccontextmanager
+    async def acquire(self, *, priority: bool = False) -> AsyncIterator[None]:
+        """Hold the host's single request slot."""
+        if self._busy:
+            self._arrivals += 1
+            waiter = asyncio.get_running_loop().create_future()
+            entry = (0 if priority else 1, self._arrivals, waiter)
+            self._waiters.append(entry)
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                if entry in self._waiters:
+                    self._waiters.remove(entry)
+                elif waiter.done() and not waiter.cancelled():
+                    # The slot was handed over and then we were cancelled:
+                    # pass it on rather than stranding it.
+                    self._wake_next()
+                raise
+        else:
+            self._busy = True
+        try:
+            yield
+        finally:
+            self._wake_next()
+
+    def _wake_next(self) -> None:
+        """Hand the slot to the best waiter, or mark it free."""
+        while self._waiters:
+            self._waiters.sort(key=lambda entry: entry[:2])
+            waiter = self._waiters.pop(0)[2]
+            if not waiter.done():
+                waiter.set_result(None)
+                return
+        self._busy = False
+
+
+def _host_lock(host: str) -> _HostGate:
+    """Return the shared serialization gate for one TV host."""
     lock = _HOST_LOCKS.get(host)
     if lock is None:
-        lock = asyncio.Lock()
+        lock = _HostGate()
         _HOST_LOCKS[host] = lock
     return lock
 
@@ -680,9 +768,10 @@ class SamsungIPControl:
 
         Serialized per host: the TV resets overlapping connections on port 1516,
         so only one call to a given host runs at a time (across every
-        SamsungIPControl instance).
+        SamsungIPControl instance). A call made inside ``priority_requests``
+        overtakes the background polls already queued on that gate.
         """
-        async with _host_lock(self._host):
+        async with _host_lock(self._host).acquire(priority=_PRIORITY_REQUEST.get()):
             return await self._hass.async_add_executor_job(
                 self._sync_request, method, params, include_token, timeout
             )

@@ -33,6 +33,7 @@ from .api.ipcontrol import (
     SamsungIPControl,
     SamsungIPControlAuthError,
     SamsungIPControlError,
+    priority_requests,
 )
 from .art_mode_guard import ArtModeWriteSuppressed, guard_for
 from .const import (
@@ -74,6 +75,11 @@ ART_MODE_PANEL_READ_BACK_WINDOW = 3.0
 # +6.7 s while getTVStates still did not report "Ambient" 11 s later (#273
 # follow-up); this decides, in the log, whether that was lag or a real conflict.
 ART_MODE_PANEL_CONFLICT_WINDOW = 20.0
+# How long the pre-write panel check may take before the write goes ahead
+# without it (seconds). It shares one serialized channel with every IP Control
+# poller, so on a busy host it can take far longer than its own 5 s command
+# timeout; the write it is meant to protect gets only 10 s in total.
+PANEL_CHECK_TIMEOUT = 3.0
 
 
 class _DeviceLoggerAdapter(logging.LoggerAdapter):
@@ -323,7 +329,28 @@ class FrameArtModeSwitch(SwitchEntity):
         # wedge) and of the WebSocket art channel (which can go stale). If the
         # panel already shows what was asked for, the request is satisfied and
         # writing again is exactly the loop we are guarding against.
-        panel = await self._panel_shows_art()
+        #
+        # Bounded separately from the caller's per-attempt timeout, because it
+        # is a guard against a redundant write and not the write itself. A TV
+        # woken from outside Home Assistant answers IP Control again while
+        # every poller rushes it at once, and this read waits its turn behind
+        # them: on a 2022 Frame woken by an IR blaster (#319) it consumed all
+        # 10 s of each of the three attempts, so the write was never issued and
+        # Art Mode simply did not come on. Not being able to read the panel is
+        # already a case the code below handles — it means "unknown", which
+        # writes — so time out into that rather than into losing the write.
+        try:
+            async with asyncio.timeout(PANEL_CHECK_TIMEOUT):
+                panel = await self._panel_shows_art()
+        except asyncio.TimeoutError:
+            self._log.debug(
+                "Art Mode %s for %s: the panel check did not answer within %ss "
+                "(IP Control busy); treating the panel as unknown and writing",
+                "ON" if turn_on else "OFF",
+                self._device_name,
+                PANEL_CHECK_TIMEOUT,
+            )
+            panel = None
         if panel is turn_on:
             if guard.pending(turn_on) is not None:
                 # An earlier write of this intent could not be read back in
@@ -825,9 +852,13 @@ class FrameArtModeSwitch(SwitchEntity):
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._set_artmode(
-                        True, after_power_on=tv_was_off, since=since
-                    )
+                    # The user is waiting on this one: its IP Control calls
+                    # overtake the background polls instead of queueing behind
+                    # them (#319).
+                    with priority_requests():
+                        result = await self._set_artmode(
+                            True, after_power_on=tv_was_off, since=since
+                        )
                     if result:
                         # Set state immediately for responsive UI and hold it
                         # against the lagging media_player reading.
@@ -943,7 +974,8 @@ class FrameArtModeSwitch(SwitchEntity):
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._set_artmode(False, since=since)
+                    with priority_requests():
+                        result = await self._set_artmode(False, since=since)
                     if result:
                         # Set state immediately for responsive UI and hold it
                         # against the lagging media_player reading.

@@ -68,7 +68,9 @@ class _Channel(art.SamsungTVAsyncArt):
         self._request_cooldown_until = 0.0
         self.sent = []
 
-    async def _send_art_request_locked(self, request_data, wait_for_event, timeout):
+    async def _send_art_request_locked(
+        self, request_data, wait_for_event, timeout, alias_keys=None
+    ):
         self.sent.append(request_data["request"])
         return {"event": request_data["request"]}
 
