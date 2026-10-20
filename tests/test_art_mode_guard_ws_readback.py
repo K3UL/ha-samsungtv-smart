@@ -30,6 +30,7 @@ against the real ArtModeWriteGuard. Time is compressed 25x.
 
 import ast
 import asyncio
+from contextlib import contextmanager
 import importlib.util
 import json
 import logging
@@ -112,6 +113,13 @@ class _IPError(Exception):
     pass
 
 
+@contextmanager
+def _priority_requests():
+    """Stand-in for the real one: ordering on the host gate is tested in
+    test_ip_control_write_priority.py, not here."""
+    yield
+
+
 def _constants(*names):
     """Read module-level float constants from switch.py, so the tests follow them."""
     source = SWITCH_PATH.read_text()
@@ -148,10 +156,12 @@ def _switch_methods():
         "ArtModeWriteSuppressed": guard_mod.ArtModeWriteSuppressed,
         "SamsungIPControlError": _IPError,
         "Any": object,
+        "priority_requests": _priority_requests,
         **_constants(
             "ART_MODE_BROADCAST_VERIFY_WINDOW",
             "ART_MODE_PANEL_READ_BACK_WINDOW",
             "ART_MODE_PANEL_CONFLICT_WINDOW",
+            "PANEL_CHECK_TIMEOUT",
         ),
     }
     for node in cls.body:
