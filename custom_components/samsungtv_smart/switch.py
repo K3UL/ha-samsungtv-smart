@@ -821,7 +821,20 @@ class FrameArtModeSwitch(SwitchEntity):
                 # Defer instead of hammering: re-apply once the media_player
                 # reports the TV reachable again (handled in the state listener).
                 self._pending_art_on = True
-                self._set_optimistic(False)
+                # Show it off — the panel is dark — but do NOT arm the
+                # optimistic hold. That hold exists to protect an explicit
+                # toggle from a reading that still lags behind it; here the
+                # toggle was ON, and holding False would suppress the very
+                # answer we are waiting for. On a 2022 Frame woken out of band
+                # by an IR blaster (#319) it did exactly that: the wake failed
+                # at 12:39:11, the TV came up in Art Mode 9 s later and every
+                # source said so — IP Control True, art_mode_status on, media
+                # title "Art Mode" — and all of them were refused as stale
+                # ("holding optimistic False") until the 45 s window ran out.
+                # _pending_art_on already records the deferral; the switch does
+                # not need to blind itself as well.
+                self._attr_is_on = False
+                self._optimistic_value = None
                 self._available = True
                 self.async_write_ha_state()
                 return
