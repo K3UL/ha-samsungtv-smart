@@ -19,6 +19,7 @@ outrank the panel.
 """
 
 import sys
+import time
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -36,20 +37,14 @@ if "pysmartthings" not in sys.modules:
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
 
-from custom_components.samsungtv_smart.api.art import (  # noqa: E402
-    SamsungTVAsyncArt,
-)
-from custom_components.samsungtv_smart.api.samsungws import (  # noqa: E402
-    ArtModeStatus,
-)
+from custom_components.samsungtv_smart.api.art import SamsungTVAsyncArt  # noqa: E402
+from custom_components.samsungtv_smart.api.samsungws import ArtModeStatus  # noqa: E402
 from custom_components.samsungtv_smart.const import (  # noqa: E402
     DATA_ART_API,
     DEFAULT_APP,
     DOMAIN,
 )
-from custom_components.samsungtv_smart.media_player import (  # noqa: E402
-    SamsungTVDevice,
-)
+from custom_components.samsungtv_smart.media_player import SamsungTVDevice  # noqa: E402
 from custom_components.samsungtv_smart.sensor import (  # noqa: E402
     IPControlStateCoordinator,
 )
@@ -59,7 +54,23 @@ ENTRY_ID = "entry-161"
 
 
 def _device(*, picture_mode, polled_at, broadcast):
-    """A Frame whose only readable signals are the panel snapshot and the art API."""
+    """A Frame whose only readable signals are the panel snapshot and the art API.
+
+    The scenarios below are written on a synthetic t=100 timeline. Rebase it
+    onto time.monotonic() with the broadcast anchored at "just now", which is
+    what every one of them means: _art_broadcast_overrides bounds the override
+    in wall-clock terms as well since 8.12.6 (a broadcast older than
+    ART_BROADCAST_GRACE stops outranking a reading that is not coming), and a
+    literal 104.4 is hours old against a real monotonic clock. Left as bare
+    literals these cases passed or failed on the host's uptime.
+    """
+    origin = time.monotonic() - (
+        broadcast[1] if broadcast is not None else (polled_at or 0.0)
+    )
+    if polled_at is not None:
+        polled_at = origin + polled_at
+    if broadcast is not None:
+        broadcast = (broadcast[0], origin + broadcast[1])
     device = object.__new__(SamsungTVDevice)
     device._entry_id = ENTRY_ID
     device._state = MediaPlayerState.OFF  # a Frame showing art reports OFF

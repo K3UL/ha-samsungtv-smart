@@ -300,6 +300,15 @@ IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=5)
 # art-mode value is considered stale and cleared (TV likely in deep standby
 # with port 1516 closed). 3 × 5s = 15s worst-case staleness.
 IP_ART_MODE_MAX_FAILURES = 3
+# A non-forced art-mode refresh closer than this to the last one is redundant
+# and is skipped (seconds). The poll runs on IP_ART_MODE_REFRESH_INTERVAL, so
+# in normal operation this never fires; it bounds a caller that asks far too
+# often. Measured on a 2022 Frame right after an out-of-band IR wake (#319):
+# 90 refreshes in 46 s, one every 0.51 s, against the 9 the timer can produce
+# — with the steady state before and after at a clean 5 s, so it is not a
+# duplicated timer. The trigger is still unidentified; this caps the cost of
+# it and logs each skip so the next capture shows the real rate.
+IP_ART_MODE_MIN_INTERVAL = IP_ART_MODE_REFRESH_INTERVAL.total_seconds() * 0.8
 # How long after an art_mode_changed broadcast an IP Control reading that
 # disagrees with it is taken for lag rather than a conflict (seconds). A 2023
 # Frame's getTVStates had not reached "Ambient" 11 s after it broadcast ON; the
@@ -815,6 +824,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # reaches IP_ART_MODE_MAX_FAILURES so a TV that stops answering on
         # port 1516 (deep standby) cannot pin a stale "art mode on" forever.
         self._ip_art_mode_failures = 0
+        # Refresh coalescing: one at a time, and a forced request that
+        # arrives while one runs is honoured once it finishes.
+        self._ip_art_mode_refreshing = False
+        self._ip_art_mode_refresh_again = False
+        self._ip_art_mode_last_refresh = 0.0
         self._ip_art_mode_refresh_unsub: Callable[[], None] | None = None
         self._ip_art_mode_initial_task: asyncio.Task | None = None
         self._ip_device_info_refresh_unsub: Callable[[], None] | None = None
@@ -1367,7 +1381,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         ``art_mode_status`` is visible right away.
         """
         self.async_write_ha_state()
-        self.hass.async_create_task(self._refresh_ip_art_mode())
+        self.hass.async_create_task(self._refresh_ip_art_mode(force=True))
         # Some models (e.g. 2024 Frames where IP Control cannot report the art
         # state and REST PowerState stays "on" in art mode) only learn about an
         # art-mode transition from SmartThings. Since the ST poll is throttled,
@@ -1377,8 +1391,58 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._st_last_poll = 0.0
             self.async_schedule_update_ha_state(True)
 
-    async def _refresh_ip_art_mode(self, _now=None) -> None:
-        """Refresh the cached Art Mode value via IP Control.
+    async def _refresh_ip_art_mode(self, _now=None, *, force: bool = False) -> None:
+        """Refresh the cached Art Mode value, at most one at a time.
+
+        Every read here costs two serialized IP Control round-trips
+        (powerControl, then artModeControl), so overlapping or near-duplicate
+        refreshes crowd out the user-initiated writes that share the host gate
+        — which is how a single wake turned into 90 refreshes in 46 s on the
+        #319 Frame. One runs at a time; a periodic one that follows another
+        too closely is dropped.
+
+        ``force`` is for the two callers whose whole point is immediacy: the
+        art-channel transition hook, which exists so the switch reflects a
+        transition within ~1 s instead of up to 5 (#326), and the eager read
+        at startup. It bypasses the interval but not the in-flight guard; a
+        forced request arriving while a refresh runs is replayed once that one
+        finishes, so the transition is never answered by a reading taken
+        before it.
+        """
+        if self._ip_art_mode_refreshing:
+            if force:
+                self._ip_art_mode_refresh_again = True
+            self._log.debug(
+                "IP Control art-mode refresh for %s already in flight; " "%s",
+                self._host,
+                "will repeat it after" if force else "skipping this one",
+            )
+            return
+        if not force:
+            since = time.monotonic() - self._ip_art_mode_last_refresh
+            if since < IP_ART_MODE_MIN_INTERVAL:
+                self._log.debug(
+                    "IP Control art-mode refresh for %s skipped: the last one "
+                    "finished %.2fs ago (minimum %.1fs)",
+                    self._host,
+                    since,
+                    IP_ART_MODE_MIN_INTERVAL,
+                )
+                return
+        self._ip_art_mode_refreshing = True
+        try:
+            await self._refresh_ip_art_mode_once()
+            if self._ip_art_mode_refresh_again:
+                # A transition landed mid-read: that reading may predate it.
+                self._ip_art_mode_refresh_again = False
+                await self._refresh_ip_art_mode_once()
+        finally:
+            self._ip_art_mode_refreshing = False
+            self._ip_art_mode_refresh_again = False
+            self._ip_art_mode_last_refresh = time.monotonic()
+
+    async def _refresh_ip_art_mode_once(self) -> None:
+        """Read the Art Mode value via IP Control and publish it.
 
         Called periodically by ``async_track_time_interval`` and once eagerly
         from ``async_added_to_hass`` so the first value is available shortly
@@ -1655,7 +1719,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # up to ~10s) IP request is still in flight — otherwise it could call
         # async_write_ha_state() on a removed entity.
         self._ip_art_mode_initial_task = self.hass.async_create_task(
-            self._refresh_ip_art_mode()
+            self._refresh_ip_art_mode(force=True)
         )
 
         # Periodically re-read model/firmware so an OTA firmware upgrade is
