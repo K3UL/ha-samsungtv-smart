@@ -90,7 +90,26 @@ async def _refresh(device, now=100.0):
         "custom_components.samsungtv_smart.media_player.time.monotonic",
         return_value=now,
     ):
-        await device._refresh_ip_art_mode()
+        # The read itself, not the coalescing wrapper added in 8.12.8: these
+        # cases are about what one refresh asks the TV, and the wrapper would
+        # drop repeat calls (and reads the patched clock for its interval).
+        await device._refresh_ip_art_mode_once()
+
+
+def _art_mode_is_on(device, now):
+    """Decide art mode on this file's synthetic clock.
+
+    Since 8.12.6 _art_broadcast_overrides also bounds the override against
+    time.monotonic() itself — a broadcast older than ART_BROADCAST_GRACE stops
+    outranking a reading that is not coming. The timestamps here are literals
+    on a t=100 timeline, so the real clock has to be patched to match or every
+    broadcast below reads as hours old.
+    """
+    with patch(
+        "custom_components.samsungtv_smart.media_player.time.monotonic",
+        return_value=now,
+    ):
+        return device._art_mode_is_on()
 
 
 # ── The read ──────────────────────────────────────────────────────────────
@@ -148,7 +167,7 @@ async def test_a_minus_32601_in_ambient_mode_is_not_latched():
 
 
 def test_the_read_path_no_longer_consults_the_option():
-    begin = MEDIA_PLAYER.index("    async def _refresh_ip_art_mode")
+    begin = MEDIA_PLAYER.index("    async def _refresh_ip_art_mode_once")
     block = MEDIA_PLAYER[begin : MEDIA_PLAYER.index("    async def ", begin + 10)]
     assert "CONF_IP_CONTROL_ART_MODE, False" not in block
     assert "async_get_art_mode(power_state=power)" in block
@@ -180,21 +199,21 @@ def test_a_getter_read_trailing_a_fresh_broadcast_is_overruled():
     device, _ = _device(broadcast=(True, 100.0))
     device._ip_art_mode = False
     device._ip_art_mode_at = 103.0
-    assert device._art_mode_is_on() is True
+    assert _art_mode_is_on(device, now=103.0) is True
 
 
 def test_a_getter_read_past_the_grace_window_stands():
     device, _ = _device(broadcast=(True, 100.0))
     device._ip_art_mode = False
     device._ip_art_mode_at = 121.0
-    assert device._art_mode_is_on() is False
+    assert _art_mode_is_on(device, now=121.0) is False
 
 
 def test_a_powered_off_reading_beats_any_broadcast():
     device, _ = _device(broadcast=(True, 100.0))
     device._ip_art_mode = False
     device._ip_art_mode_at = None
-    assert device._art_mode_is_on() is False
+    assert _art_mode_is_on(device, now=103.0) is False
 
 
 async def test_an_unchanged_reading_that_retires_a_broadcast_is_published():
@@ -205,7 +224,7 @@ async def test_an_unchanged_reading_that_retires_a_broadcast_is_published():
     device._ip_art_mode_at = 103.0
     await _refresh(device, now=125.0)
     device.async_write_ha_state.assert_called_once()
-    assert device._art_mode_is_on() is False
+    assert _art_mode_is_on(device, now=125.0) is False
 
 
 async def test_an_unchanged_reading_with_no_disagreement_is_not_republished():

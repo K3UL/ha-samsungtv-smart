@@ -137,6 +137,7 @@ def _art_client(*, answered_read, last_event_age):
     art._got_response_since_connect = answered_read
     art._unproductive_cycles = 0
     art._recurring_wedges = 0
+    art.sole_art_source = False
     art._last_wedge_at = None
     art._request_cooldown_until = 0.0
     art._proven_port = 8001

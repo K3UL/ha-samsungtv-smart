@@ -938,6 +938,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 self._persist_st_picture_mode_capability
             )
 
+        # Tell the art channel whether it is the only thing that can report
+        # Art Mode. With no IP Control paired and no SmartThings — 2019 Frames
+        # in particular run no IP Control server at all — nothing covers it
+        # while it is backed off, so its recovery cooldown must not escalate:
+        # every extra second is a transition that can be missed (#337). Set
+        # here rather than beside the art client because self._st is only
+        # decided above. Computed once at setup, which is enough: pairing IP
+        # Control or linking SmartThings rewrites the entry and reloads it.
+        self._art_api.sole_art_source = (
+            not config.get(CONF_IP_CONTROL_TOKEN) and self._st is None
+        )
+
         self._st_error_count = 0
         self._st_auth_error_count = 0
         self._st_last_exc = None
