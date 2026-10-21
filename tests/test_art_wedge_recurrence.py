@@ -82,6 +82,9 @@ class _Channel(art.SamsungTVAsyncArt):
         self._request_cooldown_until = 0.0
         self._unproductive_cycles = 0
         self._recurring_wedges = 0
+        # Mirrors the real client: set by the owner when nothing else can
+        # report art mode, which caps the recovery cooldown (#337).
+        self.sole_art_source = False
         self._last_wedge_at = None
         self._got_response_since_connect = True
         # No unsolicited event has been seen, so the event-liveness guard

@@ -51,7 +51,12 @@ async def test_failures_after_the_cache_is_cleared_do_not_claim_a_last_value():
     device._get_ip_control_client = MagicMock(return_value=client)
 
     for _ in range(5):
-        await device._refresh_ip_art_mode()
+        # The read itself, not the wrapper: since 8.12.8 _refresh_ip_art_mode
+        # coalesces calls closer than IP_ART_MODE_MIN_INTERVAL, so a tight
+        # loop through it would run once. The coalescing is covered by
+        # tests/test_ip_art_mode_refresh_coalescing.py; what this test is
+        # about is what the failure path logs.
+        await device._refresh_ip_art_mode_once()
 
     messages = [c.args[0] % c.args[1:] for c in device._log.debug.call_args_list]
     assert "keeping last value (failure 1/3)" in messages[0]

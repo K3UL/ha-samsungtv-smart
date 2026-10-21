@@ -371,6 +371,11 @@ class SamsungTVAsyncArt:
         # ms.channel.ready alone removed all spacing and took the wedge count
         # from 5 to 94 in a comparable window).
         self._unproductive_cycles = 0
+        # Set by the owner when this channel is the only thing that can report
+        # Art Mode — no IP Control paired, no SmartThings. Every second of
+        # recovery backoff is then a second of blind, so the escalation is not
+        # applied. See _note_request_timeout.
+        self.sole_art_source = False
         # Wedges that keep recurring within ART_WS_WEDGE_RECURRENCE_WINDOW,
         # whether or not the channel answered in between, and when the last one
         # was. Escalates the cooldown on their own, so a channel that is
@@ -1378,6 +1383,24 @@ class SamsungTVAsyncArt:
             self._recurring_wedges = 0
         self._last_wedge_at = now
         doublings = max(self._unproductive_cycles, self._recurring_wedges)
+        if self.sole_art_source and doublings:
+            # Spacing the retries out assumes something else keeps reporting
+            # art mode meanwhile. With no IP Control and no SmartThings there
+            # is nothing: the channel is shut for the whole cooldown and every
+            # art_mode_changed the TV sends in that window is lost. Measured on
+            # a 2019 Frame (#337): wedge at 20:14:04 -> 60 s, then 120 s, then
+            # 240 s, each new wedge landing just after the previous cooldown
+            # expired, and a transition taking ~5 min to show. The TV was
+            # reachable throughout — every reconnect succeeded. Keep the base
+            # cooldown so recovery still exists (#153) without the blind
+            # window growing.
+            self._log.debug(
+                "Art API: this channel is the only art-mode source — keeping "
+                "the base %.0fs cooldown instead of escalating to %.0fs",
+                ART_WS_RECOVERY_COOLDOWN,
+                ART_WS_RECOVERY_COOLDOWN * (2**doublings),
+            )
+            doublings = 0
         cooldown = ART_WS_RECOVERY_COOLDOWN * (2**doublings)
         self._request_cooldown_until = max(
             self._request_cooldown_until,
@@ -1412,9 +1435,15 @@ class SamsungTVAsyncArt:
             # ping-pong: 55 flips each way were measured in one window on a
             # Wi-Fi Frame, each one also rewriting the stored port (#273
             # follow-up). Say so and let the backoff above space the retries.
+            # The socket is still open here — the breaker returns early when
+            # it is not — so "away" is a guess: true of a half-dead TCP
+            # connection on a Wi-Fi Frame (#273), false of a TV that simply is
+            # not answering art reads (#337, where every reconnect succeeded).
+            # Say what was observed and leave the cause open.
             self._log.warning(
-                "Art API: port %d unresponsive (the TV or network is likely "
-                "away); keeping the port and backing off for %.0fs",
+                "Art API: no request answered on port %d since it connected "
+                "(the TV may be away, or its art app not answering); "
+                "keeping the port and backing off for %.0fs",
                 self._port,
                 cooldown,
             )
