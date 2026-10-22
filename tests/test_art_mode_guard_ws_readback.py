@@ -120,6 +120,13 @@ def _priority_requests():
     yield
 
 
+async def _settle_after_source_switch(_guard, _log, _what):
+    """Stand-in for the real one: no input was switched in these tests, so it
+    is always a no-op here. The CEC settle itself is tested in
+    test_source_switch_settles_before_art.py."""
+    return 0.0
+
+
 def _constants(*names):
     """Read module-level float constants from switch.py, so the tests follow them."""
     source = SWITCH_PATH.read_text()
@@ -157,6 +164,7 @@ def _switch_methods():
         "SamsungIPControlError": _IPError,
         "Any": object,
         "priority_requests": _priority_requests,
+        "settle_after_source_switch": _settle_after_source_switch,
         **_constants(
             "ART_MODE_BROADCAST_VERIFY_WINDOW",
             "ART_MODE_PANEL_READ_BACK_WINDOW",

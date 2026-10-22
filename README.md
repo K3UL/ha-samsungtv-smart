@@ -1334,6 +1334,42 @@ leave it on afterwards long enough for the Art app to self-update), then
 **Settings → Support → Device Care → Self Diagnosis → Reset Smart Hub**, then
 a factory reset.
 
+#### What puts a Frame in that state
+
+Selecting an input sends key presses over the WebSocket, and the TV then runs
+an **HDMI-CEC (Anynet+) negotiation** with whatever sits on that input. A
+device that announces itself as the active source during that window is
+deciding what the panel shows at the same moment Home Assistant is — and on
+some Frames that collision wedges the art app for good.
+
+The reported case was a weekday morning automation that did this with no gap:
+
+```yaml
+  - action: media_player.select_source      # 07:18:30 → keys, then CEC negotiation
+    data: {source: CINEMA 60}               #            (CINEMA 60 = an AVR on HDMI)
+  - action: media_player.play_media         # 07:18:35 → the AVR announces itself
+    target: {entity_id: media_player.avr}   #            as the active source
+```
+
+A second automation asked for Art Mode a minute later, and the TV refused it
+for the rest of the morning — including at a cadence that automation could not
+produce, and from the TV's own remote. The refusals outlived their cause, which
+is what distinguishes a wedged TV from a merely busy one.
+
+**Since 8.13.0 the integration no longer writes Art Mode into a window it
+opened itself**: after a `select_source` that switches an input, art-mode
+writes wait up to 15 s for the negotiation to finish. It is a wait, not a
+refusal — the write still happens. App launches and channel changes run no CEC
+negotiation and are not delayed.
+
+That covers only the half the integration causes. CEC traffic the TV exchanges
+with its own devices is invisible from Home Assistant, so **put a gap in the
+automation too**: 20–30 s between a `select_source` onto a CEC input and
+whatever comes next. If you do not need Anynet+ at all — because Home
+Assistant drives the AVR directly — turning it off on the TV (*Settings →
+General → External Device Manager → Anynet+ (HDMI-CEC)*) removes the conflict
+at the source.
+
 ### IP Control reports Art Mode "on" when it isn't
 
 > [!WARNING]

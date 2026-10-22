@@ -87,7 +87,11 @@ from .api.samsungcast import SamsungCastTube
 from .api.samsungws import ArtModeStatus, SamsungTVAsyncRest, SamsungTVWS
 from .api.smartthings import SmartThingsCapabilityUnsupported, SmartThingsTV, STStatus
 from .api.upnp import SamsungUPnP
-from .art_mode_guard import ArtModeWriteSuppressed, guard_for
+from .art_mode_guard import (
+    ArtModeWriteSuppressed,
+    guard_for,
+    settle_after_source_switch,
+)
 from .const import (
     ART_APP_ID,
     ATTR_ART_PICTURE_MODE,
@@ -4396,6 +4400,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self.async_send_command("KEY_HOME")
             await asyncio.sleep(SOURCE_WAKE_DELAY)
 
+    def _art_write_guard(self):
+        """The entry's shared art-mode write guard (also used by the switch)."""
+        return guard_for(
+            self.hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
+        )
+
+    def _note_source_switch(self) -> None:
+        """Record an input switch, so art-mode writes wait for CEC to settle."""
+        self._art_write_guard().note_source_switch()
+
     async def async_select_source(self, source):
         """Select input source."""
         running_app = DEFAULT_APP
@@ -4412,6 +4426,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
+            self._note_source_switch()
         elif self._source_list and (resolved := self._resolve_source_by_id(source)):
             # Accept technical IDs (e.g. "HDMI3") in addition to display names
             source_key = resolved[1]
@@ -4419,6 +4434,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
+            self._note_source_switch()
         elif self._app_list and source in self._app_list:
             app_id = self._app_list[source]
             running_app = source
@@ -4712,6 +4728,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             result = {"error": "Frame TV not supported"}
             self._store_art_result(result)
             return result
+        await settle_after_source_switch(
+            self._art_write_guard(), self._log, "art_set_artmode"
+        )
         try:
             await self._art_api.set_artmode(enabled)
             result = {"service": "art_set_artmode", "success": True, "enabled": enabled}
@@ -4895,9 +4914,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._log.debug("Frame Art: already in Art Mode, ready")
             return True
 
-        guard = guard_for(
-            self.hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
-        )
+        guard = self._art_write_guard()
+
+        # An input switch we just sent is still being negotiated over HDMI-CEC;
+        # writing art mode into that window is the collision that wedges some
+        # Frames. Wait it out rather than refuse: the request is still wanted.
+        await settle_after_source_switch(guard, self._log, "Frame Art")
 
         # Panel truth before anything is written or toggled. art_mode_status
         # is a derived reading (IP flag, WebSocket art channel, SmartThings)

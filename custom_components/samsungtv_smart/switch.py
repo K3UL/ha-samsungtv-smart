@@ -35,7 +35,11 @@ from .api.ipcontrol import (
     SamsungIPControlError,
     priority_requests,
 )
-from .art_mode_guard import ArtModeWriteSuppressed, guard_for
+from .art_mode_guard import (
+    ArtModeWriteSuppressed,
+    guard_for,
+    settle_after_source_switch,
+)
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_ART_PORT,
@@ -855,6 +859,16 @@ class FrameArtModeSwitch(SwitchEntity):
         max_retries = 5 if tv_was_off else 3
         retry_delay = 3 if tv_was_off else 2
 
+        # An input switch we just sent is still being negotiated over HDMI-CEC;
+        # an art-mode write landing in that window is what wedges some Frames.
+        # Waited here rather than inside the attempt loop, whose 10 s budget is
+        # for the write itself.
+        await settle_after_source_switch(
+            guard_for(self._hass.data[DOMAIN][self._entry.entry_id]),
+            self._log,
+            "Art Mode ON",
+        )
+
         since = self._art_api.art_mode_broadcast_count
         for attempt in range(max_retries):
             try:
@@ -976,6 +990,13 @@ class FrameArtModeSwitch(SwitchEntity):
 
         max_retries = 3
         retry_delay = 2
+
+        # Same CEC settle as the ON path: either direction collides.
+        await settle_after_source_switch(
+            guard_for(self._hass.data[DOMAIN][self._entry.entry_id]),
+            self._log,
+            "Art Mode OFF",
+        )
 
         since = self._art_api.art_mode_broadcast_count
         for attempt in range(max_retries):
