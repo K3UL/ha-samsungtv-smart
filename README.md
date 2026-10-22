@@ -59,6 +59,7 @@ you can tune.
   - [Art Mode won't turn on from standby (some 2020 Frames)](#art-mode-wont-turn-on-from-standby-some-2020-frames)
   - [SmartThings stops working: "Forbidden"](#smartthings-stops-working-forbidden-in-the-log)
   - [Picture mode does not change the TV at all](#picture-mode-does-not-change-the-tv-at-all)
+  - [Art Mode no longer toggles, even with the TV's own remote](#art-mode-no-longer-toggles-even-with-the-tvs-own-remote)
   - [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt)
 - [Credits](#credits)
 
@@ -738,6 +739,7 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 | `samsungtv_smart.art_set_picture_mode` | Set the Art Mode picture type (raw TV value; read the current one first with `art_get_device_info`) |
 | `samsungtv_smart.art_set_slideshow` | Configure slideshow (duration, shuffle, category). Alias of `art_set_auto_rotation` — auto-routed to whichever API the TV speaks |
 | `samsungtv_smart.art_set_auto_rotation` | Configure auto-rotation (duration, shuffle, category). Alias of `art_set_slideshow` — works on older Frames that don't support the slideshow API |
+| `samsungtv_smart.art_restart_app` | Stop and relaunch the TV's built-in Art Mode app. Last resort for a Frame whose art app has stopped answering — see below |
 
 #### Service Examples
 
@@ -1293,6 +1295,80 @@ dedicated key and are cloud-only.
 ### Art Mode fails briefly after TV wakes from standby
 
 When the TV wakes from standby (e.g. via an automation), the WebSocket connection needs a short time to re-establish before the Art API becomes available. This is normal — the integration will self-recover within a minute. If you experience consistent failures in morning automations, add a 60–90 second delay after the TV turns on before triggering Art Mode commands.
+
+### Art Mode no longer toggles, even with the TV's own remote
+
+A Frame can reach a state where nothing switches Art Mode any more: not Home
+Assistant, not SmartThings, and not the power button on the TV's own remote —
+pressing it takes you back to the Art Mode menu and no further. The
+integration's own symptom is the write going out and the panel never
+following: `artModeOn was accepted but the panel did not switch to Ambient`,
+repeating on every retry.
+
+When the TV's own remote is affected too, the fault is on the TV, not in Home
+Assistant. What has usually happened is that the TV's built-in Art Mode app
+(`org.tizen.art-app`) is still running but no longer answering. A power cycle
+fixes it because it reloads that app.
+
+`art_restart_app` does the same thing without cutting the power: it stops the
+app and launches it again.
+
+```yaml
+action: samsungtv_smart.art_restart_app
+target:
+  entity_id: media_player.samsung_frame
+data:
+  delay: 3   # seconds between the stop and the start; raise it if it comes
+             # back in the same state
+```
+
+> ⚠️ **Experimental.** The Art Mode app is a *built-in* Tizen app, and some
+> models decline to stop one — the TV accepts the command and nothing happens.
+> The panel may go dark for the length of the delay. Call the service with
+> debug logging on to see the TV's own answer on the control channel. It
+> cannot unstick a wedged IP Control `artModeControl` flag — that is a
+> different fault, covered in the next section.
+
+If it does not help, in order: power the TV off at the wall for a minute (and
+leave it on afterwards long enough for the Art app to self-update), then
+**Settings → Support → Device Care → Self Diagnosis → Reset Smart Hub**, then
+a factory reset.
+
+#### What puts a Frame in that state
+
+Selecting an input sends key presses over the WebSocket, and the TV then runs
+an **HDMI-CEC (Anynet+) negotiation** with whatever sits on that input. A
+device that announces itself as the active source during that window is
+deciding what the panel shows at the same moment Home Assistant is — and on
+some Frames that collision wedges the art app for good.
+
+The reported case was a weekday morning automation that did this with no gap:
+
+```yaml
+  - action: media_player.select_source      # 07:18:30 → keys, then CEC negotiation
+    data: {source: CINEMA 60}               #            (CINEMA 60 = an AVR on HDMI)
+  - action: media_player.play_media         # 07:18:35 → the AVR announces itself
+    target: {entity_id: media_player.avr}   #            as the active source
+```
+
+A second automation asked for Art Mode a minute later, and the TV refused it
+for the rest of the morning — including at a cadence that automation could not
+produce, and from the TV's own remote. The refusals outlived their cause, which
+is what distinguishes a wedged TV from a merely busy one.
+
+**Since 8.13.0 the integration no longer writes Art Mode into a window it
+opened itself**: after a `select_source` that switches an input, art-mode
+writes wait up to 15 s for the negotiation to finish. It is a wait, not a
+refusal — the write still happens. App launches and channel changes run no CEC
+negotiation and are not delayed.
+
+That covers only the half the integration causes. CEC traffic the TV exchanges
+with its own devices is invisible from Home Assistant, so **put a gap in the
+automation too**: 20–30 s between a `select_source` onto a CEC input and
+whatever comes next. If you do not need Anynet+ at all — because Home
+Assistant drives the AVR directly — turning it off on the TV (*Settings →
+General → External Device Manager → Anynet+ (HDMI-CEC)*) removes the conflict
+at the source.
 
 ### IP Control reports Art Mode "on" when it isn't
 

@@ -87,13 +87,19 @@ from .api.samsungcast import SamsungCastTube
 from .api.samsungws import ArtModeStatus, SamsungTVAsyncRest, SamsungTVWS
 from .api.smartthings import SmartThingsCapabilityUnsupported, SmartThingsTV, STStatus
 from .api.upnp import SamsungUPnP
-from .art_mode_guard import ArtModeWriteSuppressed, guard_for
+from .art_mode_guard import (
+    ArtModeWriteSuppressed,
+    guard_for,
+    settle_after_source_switch,
+)
 from .const import (
+    ART_APP_ID,
     ATTR_ART_PICTURE_MODE,
     ATTR_BRIGHTNESS,
     ATTR_CATEGORY_ID,
     ATTR_COLOR_TEMPERATURE,
     ATTR_CONTENT_ID,
+    ATTR_DELAY,
     ATTR_DURATION,
     ATTR_ENABLED,
     ATTR_FILE_PATH,
@@ -168,6 +174,7 @@ from .const import (
     SERVICE_ART_GET_THUMBNAIL,
     SERVICE_ART_GET_THUMBNAILS_BATCH,
     SERVICE_ART_IDENTIFY,
+    SERVICE_ART_RESTART_APP,
     SERVICE_ART_SELECT_IMAGE,
     SERVICE_ART_SET_ARTMODE,
     SERVICE_ART_SET_AUTO_ROTATION,
@@ -553,6 +560,16 @@ async def async_setup_entry(
         SERVICE_ART_SET_PICTURE_MODE,
         {vol.Required(ATTR_ART_PICTURE_MODE): vol.Coerce(int)},
         "async_art_set_picture_mode",
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    platform.async_register_entity_service(
+        SERVICE_ART_RESTART_APP,
+        {
+            vol.Optional(ATTR_DELAY, default=3.0): vol.All(
+                vol.Coerce(float), vol.Range(min=0, max=60)
+            )
+        },
+        "async_art_restart_app",
         supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
@@ -4383,6 +4400,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self.async_send_command("KEY_HOME")
             await asyncio.sleep(SOURCE_WAKE_DELAY)
 
+    def _art_write_guard(self):
+        """The entry's shared art-mode write guard (also used by the switch)."""
+        return guard_for(
+            self.hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
+        )
+
+    def _note_source_switch(self) -> None:
+        """Record an input switch, so art-mode writes wait for CEC to settle."""
+        self._art_write_guard().note_source_switch()
+
     async def async_select_source(self, source):
         """Select input source."""
         running_app = DEFAULT_APP
@@ -4399,6 +4426,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
+            self._note_source_switch()
         elif self._source_list and (resolved := self._resolve_source_by_id(source)):
             # Accept technical IDs (e.g. "HDMI3") in addition to display names
             source_key = resolved[1]
@@ -4406,6 +4434,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
+            self._note_source_switch()
         elif self._app_list and source in self._app_list:
             app_id = self._app_list[source]
             running_app = source
@@ -4699,6 +4728,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             result = {"error": "Frame TV not supported"}
             self._store_art_result(result)
             return result
+        await settle_after_source_switch(
+            self._art_write_guard(), self._log, "art_set_artmode"
+        )
         try:
             await self._art_api.set_artmode(enabled)
             result = {"service": "art_set_artmode", "success": True, "enabled": enabled}
@@ -4882,9 +4914,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._log.debug("Frame Art: already in Art Mode, ready")
             return True
 
-        guard = guard_for(
-            self.hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
-        )
+        guard = self._art_write_guard()
+
+        # An input switch we just sent is still being negotiated over HDMI-CEC;
+        # writing art mode into that window is the collision that wedges some
+        # Frames. Wait it out rather than refuse: the request is still wanted.
+        await settle_after_source_switch(guard, self._log, "Frame Art")
 
         # Panel truth before anything is written or toggled. art_mode_status
         # is a derived reading (IP flag, WebSocket art channel, SmartThings)
@@ -6136,6 +6171,80 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         except Exception as ex:
             self._log.error("Error setting art picture mode: %s", ex)
             return {"error": str(ex)}
+
+    async def async_art_restart_app(self, delay: float = 3.0) -> dict:
+        """Stop and relaunch the TV's Art Mode app.
+
+        The art API has no reset verb — its only reset is reset_brightness.
+        But Art Mode is an ordinary Tizen app, org.tizen.art-app, and the
+        remote WebSocket exposes ms.application.stop and ms.application.start,
+        so the app can be cycled without cutting the TV's power. That is the
+        software equivalent of the unplug-and-replug that unwedges a Frame
+        whose art app has stopped answering (#326, #337).
+
+        Experimental. org.tizen.art-app is a built-in app and Tizen may
+        decline to stop one, in which case the TV accepts the command and
+        nothing happens; turn on debug logging to see its answer on the
+        control channel. The panel may also go dark for the delay between the
+        two commands. The returned dict reports each step separately, so a
+        stop that went out but a start that did not is visible as such.
+        """
+        result: dict[str, Any] = {
+            "service": "art_restart_app",
+            "app_id": ART_APP_ID,
+            "delay": delay,
+        }
+        if not await self._ensure_frame_tv_check():
+            result["error"] = "Frame TV not supported"
+            self._store_art_result(result)
+            return result
+
+        try:
+            stopped = await self.hass.async_add_executor_job(
+                self._ws.stop_app, ART_APP_ID
+            )
+            result["stopped"] = bool(stopped)
+            if not stopped:
+                result["error"] = (
+                    "ms.application.stop could not be sent — the TV's control "
+                    "channel is down or dropped the command (see the log). "
+                    "Turn the TV on, wait for the integration to reconnect, "
+                    "then try again."
+                )
+                self._store_art_result(result)
+                return result
+
+            # The art channel belongs to the app we just stopped. Drop it now
+            # so the next art request opens a fresh socket to the new instance
+            # instead of waiting out the dead one's timeouts. Never let this
+            # step keep the relaunch from happening: an art app left stopped
+            # is worse than a stale socket.
+            try:
+                await self._art_api.close()
+            except Exception as ex:  # noqa: BLE001 - reported, never fatal
+                self._log.debug("Could not close the art socket: %s", ex)
+                result["art_socket_close_failed"] = str(ex)
+
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            started = await self.hass.async_add_executor_job(
+                self._ws.start_app, ART_APP_ID
+            )
+            result["started"] = bool(started)
+            if not started:
+                result["error"] = (
+                    "The art app was stopped but ms.application.start could "
+                    "not be sent: the control channel dropped in between. "
+                    "Use the TV's own remote to go back to Art Mode."
+                )
+            self._store_art_result(result)
+            return result
+        except Exception as ex:
+            self._log.error("Error restarting the art app: %s", ex)
+            result["error"] = str(ex)
+            self._store_art_result(result)
+            return result
 
     async def async_art_set_favourite(
         self,

@@ -29,6 +29,7 @@ without either.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import time
 
@@ -37,6 +38,23 @@ import time
 # into a write loop; short enough that a genuine retry after a transient
 # failure is not held for long.
 ART_MODE_WRITE_COOLDOWN = 60.0
+
+# Seconds to let a source switch settle before art mode is written.
+#
+# Selecting an input sends key presses over the WebSocket, and the TV then runs
+# an HDMI-CEC (Anynet+) negotiation with whatever sits on that input. A device
+# that announces itself as the active source during that window is deciding
+# what the panel shows at the same moment we are, and the two disagree. On a
+# QE55LS03D an automation that selected an AVR's input and started playback on
+# it with no gap left the TV unable to enter Art Mode at all -- not from Home
+# Assistant, not from its own remote -- until it was power-cycled; the refusals
+# outlived the automation that caused them by forty minutes, which is a wedged
+# TV rather than a busy one.
+#
+# This only covers the half we can see: a switch WE sent. CEC traffic the TV
+# exchanges with its own devices is invisible from here, so a gap in the
+# automation itself is still worth having.
+SOURCE_SWITCH_SETTLE = 15.0
 
 # Key under which the per-entry guard is stored in hass.data[DOMAIN][entry_id].
 DATA_ART_MODE_GUARD = "art_mode_write_guard"
@@ -66,12 +84,16 @@ class ArtModeWriteGuard:
         self,
         cooldown: float = ART_MODE_WRITE_COOLDOWN,
         clock: Callable[[], float] = time.monotonic,
+        settle: float = SOURCE_SWITCH_SETTLE,
     ) -> None:
         self._cooldown = cooldown
         self._clock = clock
+        self._settle = settle
         # intent (True = art on, False = art off) -> monotonic time of the last
         # write of that intent that was not verified to have taken.
         self._unverified: dict[bool, float] = {}
+        # When we last switched the TV's input, or None if we never have.
+        self._source_switch_at: float | None = None
 
     def check(self, turn_on: bool) -> None:
         """Raise ArtModeWriteSuppressed if this intent was just written in vain."""
@@ -108,6 +130,22 @@ class ArtModeWriteGuard:
         self._unverified.pop(turn_on, None)
         self._unverified.pop(not turn_on, None)
 
+    def note_source_switch(self) -> None:
+        """An input switch was just sent to the TV."""
+        self._source_switch_at = self._clock()
+
+    def source_switch_settling(self) -> float:
+        """Seconds to wait before writing art mode is safe (0.0 if none).
+
+        Deliberately not part of ``check``: this is "not yet", not "no". The
+        write is still wanted, so the caller waits it out rather than failing
+        an automation that did nothing wrong.
+        """
+        if self._source_switch_at is None:
+            return 0.0
+        remaining = self._settle - (self._clock() - self._source_switch_at)
+        return max(0.0, remaining)
+
     def pending(self, turn_on: bool) -> float | None:
         """Seconds since the last unverified write of this intent, if any."""
         last = self._unverified.get(turn_on)
@@ -126,3 +164,24 @@ def guard_for(entry_store: dict) -> ArtModeWriteGuard:
         guard = ArtModeWriteGuard()
         entry_store[DATA_ART_MODE_GUARD] = guard
     return guard
+
+
+async def settle_after_source_switch(guard: ArtModeWriteGuard, log, what: str) -> float:
+    """Hold an art-mode write until a source switch we sent has settled.
+
+    Returns the seconds actually waited, so a caller can report it. Separate
+    from the guard itself to keep that class free of asyncio and testable as
+    plain data.
+    """
+    remaining = guard.source_switch_settling()
+    if remaining <= 0:
+        return 0.0
+    log.debug(
+        "%s: an input switch was sent %.0fs ago; waiting %.1fs for the TV's "
+        "HDMI-CEC negotiation to finish before writing art mode",
+        what,
+        SOURCE_SWITCH_SETTLE - remaining,
+        remaining,
+    )
+    await asyncio.sleep(remaining)
+    return remaining

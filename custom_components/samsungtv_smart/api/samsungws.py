@@ -1564,6 +1564,46 @@ class SamsungTVWS:
             key_press_delay=0,
         )
 
+    def _send_app_lifecycle(self, method, app_id):
+        """Send an ms.application.* lifecycle command on the control channel.
+
+        Unlike run_app there is no ed.apps.launch fallback: that event only
+        knows how to launch, so without the control channel these cannot be
+        sent at all. Say so rather than returning a silent False.
+        """
+        if not (self._ws_control and self._is_control_connected):
+            self._log.warning(
+                "Cannot send %s for %s: the control channel is not connected",
+                method,
+                app_id,
+            )
+            return False
+
+        self._log.debug("Sending %s for app_id: %s", method, app_id)
+        return self._ws_send(
+            {
+                "id": app_id,
+                "method": method,
+                "params": {"id": app_id},
+            },
+            key_press_delay=0,
+            use_control=True,
+            ws_socket=self._ws_control,
+        )
+
+    def stop_app(self, app_id):
+        """Stop a running app on the TV."""
+        return self._send_app_lifecycle("ms.application.stop", app_id)
+
+    def start_app(self, app_id):
+        """Launch an app by id, skipping the app-type lookup run_app does.
+
+        run_app picks its channel from the installed-app list, which a
+        built-in app is usually missing from; this always sends the
+        documented ms.application.start.
+        """
+        return self._send_app_lifecycle("ms.application.start", app_id)
+
     def open_browser(self, url):
         """Launch the browser app on the TV."""
         self._log.debug("Opening url in browser %s", url)
