@@ -59,6 +59,7 @@ you can tune.
   - [Art Mode won't turn on from standby (some 2020 Frames)](#art-mode-wont-turn-on-from-standby-some-2020-frames)
   - [SmartThings stops working: "Forbidden"](#smartthings-stops-working-forbidden-in-the-log)
   - [Picture mode does not change the TV at all](#picture-mode-does-not-change-the-tv-at-all)
+  - [Art Mode no longer toggles, even with the TV's own remote](#art-mode-no-longer-toggles-even-with-the-tvs-own-remote)
   - [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt)
 - [Credits](#credits)
 
@@ -738,6 +739,7 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 | `samsungtv_smart.art_set_picture_mode` | Set the Art Mode picture type (raw TV value; read the current one first with `art_get_device_info`) |
 | `samsungtv_smart.art_set_slideshow` | Configure slideshow (duration, shuffle, category). Alias of `art_set_auto_rotation` — auto-routed to whichever API the TV speaks |
 | `samsungtv_smart.art_set_auto_rotation` | Configure auto-rotation (duration, shuffle, category). Alias of `art_set_slideshow` — works on older Frames that don't support the slideshow API |
+| `samsungtv_smart.art_restart_app` | Stop and relaunch the TV's built-in Art Mode app. Last resort for a Frame whose art app has stopped answering — see below |
 
 #### Service Examples
 
@@ -1293,6 +1295,44 @@ dedicated key and are cloud-only.
 ### Art Mode fails briefly after TV wakes from standby
 
 When the TV wakes from standby (e.g. via an automation), the WebSocket connection needs a short time to re-establish before the Art API becomes available. This is normal — the integration will self-recover within a minute. If you experience consistent failures in morning automations, add a 60–90 second delay after the TV turns on before triggering Art Mode commands.
+
+### Art Mode no longer toggles, even with the TV's own remote
+
+A Frame can reach a state where nothing switches Art Mode any more: not Home
+Assistant, not SmartThings, and not the power button on the TV's own remote —
+pressing it takes you back to the Art Mode menu and no further. The
+integration's own symptom is the write going out and the panel never
+following: `artModeOn was accepted but the panel did not switch to Ambient`,
+repeating on every retry.
+
+When the TV's own remote is affected too, the fault is on the TV, not in Home
+Assistant. What has usually happened is that the TV's built-in Art Mode app
+(`org.tizen.art-app`) is still running but no longer answering. A power cycle
+fixes it because it reloads that app.
+
+`art_restart_app` does the same thing without cutting the power: it stops the
+app and launches it again.
+
+```yaml
+action: samsungtv_smart.art_restart_app
+target:
+  entity_id: media_player.samsung_frame
+data:
+  delay: 3   # seconds between the stop and the start; raise it if it comes
+             # back in the same state
+```
+
+> ⚠️ **Experimental.** The Art Mode app is a *built-in* Tizen app, and some
+> models decline to stop one — the TV accepts the command and nothing happens.
+> The panel may go dark for the length of the delay. Call the service with
+> debug logging on to see the TV's own answer on the control channel. It
+> cannot unstick a wedged IP Control `artModeControl` flag — that is a
+> different fault, covered in the next section.
+
+If it does not help, in order: power the TV off at the wall for a minute (and
+leave it on afterwards long enough for the Art app to self-update), then
+**Settings → Support → Device Care → Self Diagnosis → Reset Smart Hub**, then
+a factory reset.
 
 ### IP Control reports Art Mode "on" when it isn't
 

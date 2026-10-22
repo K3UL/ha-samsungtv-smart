@@ -466,6 +466,36 @@ art_set_picture_mode:
           min: 0
           mode: box
 
+art_restart_app:
+  name: Restart the Art Mode app
+  description: >-
+    Stop and relaunch the TV's built-in Art Mode app (org.tizen.art-app).
+    Last resort for a Frame whose art app has stopped answering — the one
+    whose Art Mode no longer toggles from Home Assistant nor from the TV's
+    own remote. It is the software equivalent of a power cycle, without
+    cutting the power. EXPERIMENTAL: the art app is a built-in Tizen app and
+    some models decline to stop one, in which case the TV accepts the
+    command and nothing changes. The panel may go dark while the app is
+    down. The response reports the stop and the start separately.
+  target:
+    entity:
+      integration: samsungtv_smart
+  fields:
+    delay:
+      name: Delay
+      description: >-
+        Seconds to wait between stopping the app and launching it again.
+        Raise it if the app comes back in the same wedged state.
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.5
+          unit_of_measurement: seconds
+          mode: box
+
 art_set_favourite:
   name: Set Favourite Status
   description: Add or remove artwork from favourites.

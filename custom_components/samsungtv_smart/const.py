@@ -310,6 +310,14 @@ SERVICE_ART_SET_SLIDESHOW = "art_set_slideshow"
 SERVICE_ART_SET_AUTO_ROTATION = "art_set_auto_rotation"
 SERVICE_ART_GET_DEVICE_INFO = "art_get_device_info"
 SERVICE_ART_SET_PICTURE_MODE = "art_set_picture_mode"
+SERVICE_ART_RESTART_APP = "art_restart_app"
+
+# Tizen app id of the built-in Art Mode app. The art API has no reset verb —
+# its only reset is reset_brightness — but Art Mode is an ordinary Tizen app,
+# so stopping and relaunching it is the software equivalent of the power cycle
+# that unwedges a Frame whose art app has stopped answering (#326, #337).
+ART_APP_ID = "org.tizen.art-app"
+
 SERVICE_SEND_TEXT = "send_text"
 
 # Frame Art Service Attributes
@@ -328,6 +336,7 @@ ATTR_DURATION = "duration"
 ATTR_SHUFFLE = "shuffle"
 ATTR_ENABLED = "enabled"
 ATTR_STATUS = "status"
+ATTR_DELAY = "delay"
 ATTR_ART_PICTURE_MODE = "art_picture_mode"
 
 SIGNAL_CONFIG_ENTITY = f"{DOMAIN}_config"
