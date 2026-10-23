@@ -97,7 +97,7 @@ you can tune.
 - For Artwork Identification (optional): a Google Cloud Vision API key and an LLM API key (Anthropic, OpenAI or Gemini)
 - A Samsung Smart TV running **Tizen OS** (2016+), reachable on the local network
 - **Home Assistant and the TV on the same subnet / VLAN.** Samsung's local WebSocket pairing (ports **8001/8002**) generally does **not** work across subnets or VLANs, *even when the ports are reachable and routed*. If HA and the TV must stay on separate networks, you need SNAT / IP masquerading so the TV sees the traffic as coming from a local address — see [Troubleshooting](#setup-wizard-loops-forever--mschanneltimeout-on-8002--mschannelunauthorized-on-8001).
-- For SmartThings features: a Samsung account and a SmartThings-registered TV
+- For SmartThings features (optional): a Samsung account, a SmartThings-registered TV, and — since October 2026 — a paid SmartThings **Personal plan** for third-party API access. Everything local works without it; see [SmartThings Authentication](#smartthings-authentication)
 
 ---
 
@@ -176,29 +176,37 @@ This integration is a **custom repository** — it is not in the HACS default st
 
 ### SmartThings Authentication
 
-> ⚠️ **Upcoming SmartThings API pricing change.** Samsung has announced that the
-> SmartThings API will move to paid tiers, with free access phasing out around
-> **October 2026** (a **$4.99/month "Personal" plan** with a monthly call quota
-> for individual/non-commercial developers, plus separate commercial tiers —
-> exact quotas not yet published). All SmartThings features of this integration
-> (picture mode, channel/app info, sound mode, etc.) call the SmartThings API
-> **under your own Samsung account**, so this may eventually apply to you, not
-> just to the project itself. Nothing changes today and no code changes are
-> required yet — this integration still works exactly as before. We're tracking
-> the published quotas and will document any impact (e.g. reducing polling
-> frequency) once Samsung releases the details. See the
-> [SmartThings blog post](https://blog.smartthings.com/smartthings-updates/a-new-enhanced-smartthings-api-experience/)
-> for the announcement.
+> ⚠️ **SmartThings API access is now paid.** Samsung's phase-out of free
+> SmartThings **API** access started in **October 2026**: individual,
+> non-commercial use through a third-party tool now requires a **Personal plan
+> (announced at $4.99/month)**, with separate commercial tiers. This applies to
+> **any** third-party client, Home Assistant included — the core SmartThings
+> integration shipped with Home Assistant documents the same change. Samsung's
+> own SmartThings app stays free, and so does building integrations in the
+> Developer Center; it is third-party API access that moved behind the plan.
+> Call quotas had not been published at the time of writing, so check
+> [Samsung's announcement](https://blog.smartthings.com/smartthings-updates/a-new-enhanced-smartthings-api-experience/)
+> for the current terms rather than trusting this paragraph on price.
 >
-> **How this integration already minimises SmartThings calls.** By design it is
-> **local-first**: control (power, apps, sources, keys, volume, and the entire
-> Frame Art Mode) goes over the local WebSocket / IP Control path, and the
-> SmartThings cloud API is only used as a **secondary enrichment/status layer**
-> (and last resort when local state is unavailable). SmartThings polling is
+> **What this means for this integration.** All of its SmartThings features
+> (picture mode, channel and app info, sound mode, power metering, Hue Sync)
+> call the SmartThings API **under your own Samsung account**, so they fall
+> under your plan, not the project's.
+>
+> **What keeps working without SmartThings at all.** Everything local, which is
+> most of it: power on/off, apps, sources, keys, volume, and the **entire Frame
+> Art Mode** go over the local WebSocket and IP Control paths. SmartThings is a
+> secondary enrichment and status layer, plus a last resort when local state is
+> unavailable. If you decide not to subscribe, leave SmartThings unconfigured
+> and the integration still does its main job — you lose the cloud-only values
+> listed above, and **SmartThings as a wake method**, so set *Power On Method*
+> to Wake-on-LAN or IP Control instead (see
+> [Options](#options)).
+>
+> **Keeping the call volume down if you do subscribe.** SmartThings polling is
 > throttled and **configurable from 5 to 30 seconds** (with a separate, longer
-> content-list interval), so you can dial the call volume down to stay within a
-> free/cheap tier. If you set the SmartThings poll interval to 30 s, that's at
-> most ~2 calls/minute while the TV is on, and effectively none while it's off.
+> content-list interval). At 30 s that is at most ~2 calls/minute while the TV
+> is on, and effectively none while it is off.
 
 Three methods are available. Choose **one**.
 
