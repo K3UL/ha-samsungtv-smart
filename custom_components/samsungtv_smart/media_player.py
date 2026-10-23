@@ -330,6 +330,28 @@ ART_BROADCAST_GRACE = 20.0
 # at the default 5 s scan interval: long enough that a brief network hiccup
 # does not unsee a real Art Mode, and it clears on the first answered read.
 ART_UNREACHABLE_WINDOW = 60.0
+# How many times an art-mode activation is written before it is called a
+# failure, and how long each attempt's confirmation is waited for afterwards.
+#
+# A Frame that has just woken swallows its first art-mode write outright and
+# answers the second one late. Measured on a QE55LS03D, both on the same
+# morning: at 07:00 the single write went out 0.1 s after a get_artmode_status
+# that answered in 98 ms, got neither a reply nor a broadcast, and the TV was
+# left on its input. Six minutes later the Art Mode switch, which retries, hit
+# the same wall on its first write and then got the second one through — the
+# art_mode_changed broadcast 6.40 s after the request and the reply itself
+# 8.05 s after it, both past _send_art_request's 5 s budget.
+#
+# So one attempt reports a failure the TV was about to honour, and a write
+# whose answer is merely late reads the same as one that was dropped. The
+# grace is what tells them apart; the retry is what recovers the dropped one.
+# The grace has to clear both measurements above, so 6 s would miss the very
+# broadcast it exists for. Between attempts the retry delay serves as the same
+# listening window, so only the last attempt pays the full grace.
+ART_ON_ATTEMPTS_AFTER_POWER_ON = 3
+ART_ON_ATTEMPTS = 2
+ART_ON_RETRY_DELAY = 3.0
+ART_ON_BROADCAST_GRACE = 10.0
 # Device identity (model / firmware) is fetched via IP Control once at startup
 # and then re-checked on this cadence, so a firmware upgrade is picked up
 # without re-pairing. It is a get-only LAN call and the value rarely changes,
@@ -5105,12 +5127,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             else:
                 self._log.info("Frame Art: Art Mode is OFF, activating it...")
             writing = True
-            async with asyncio.timeout(10):
-                result = await self._art_api.set_artmode(True)
+            result = await self._write_art_mode_on(woken)
             writing = False
 
             if not result:
-                self._log.error("Frame Art: Failed to activate Art Mode")
+                self._log.error(
+                    "Frame Art: Failed to activate Art Mode — the TV answered "
+                    "neither the write nor with a broadcast"
+                )
                 self._hold_art_on_if_sent(guard)
                 return False
 
@@ -5148,6 +5172,81 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         except Exception as ex:
             self._log.error("Frame Art: Error ensuring Art Mode: %s", ex)
             return False
+
+    async def _write_art_mode_on(self, after_power_on: bool) -> bool:
+        """Write art mode on, retrying, and accept a late broadcast as proof.
+
+        ``set_artmode`` already races the TV's reply against its
+        ``art_mode_changed`` broadcast, but on a Frame that has just woken
+        both land after the 5 s request budget, so it returns false for a
+        write the TV goes on to honour. Two things are needed and neither was
+        here: a few more seconds of listening before an attempt is called
+        lost, and another attempt when it really was dropped — see
+        ART_ON_BROADCAST_GRACE for the measurements.
+
+        The broadcast mark is taken once, before the first attempt, so a
+        broadcast answering an earlier write still counts when it arrives
+        during a later one. That is what the Art Mode switch does, and why
+        the switch recovered the TV this path had given up on.
+        """
+        attempts = ART_ON_ATTEMPTS_AFTER_POWER_ON if after_power_on else ART_ON_ATTEMPTS
+        since = self._art_api.art_mode_broadcast_count
+
+        for attempt in range(attempts):
+            try:
+                async with asyncio.timeout(10):
+                    if await self._art_api.set_artmode(True):
+                        return True
+            except asyncio.TimeoutError:
+                # One slow attempt is not the end of the operation; the
+                # broadcast may still arrive, and another write may land.
+                self._log.debug(
+                    "Frame Art: art-mode write %d/%d timed out", attempt + 1, attempts
+                )
+
+            last = attempt == attempts - 1
+            if not last:
+                self._log.debug(
+                    "Frame Art: art-mode write %d/%d went unanswered; retrying "
+                    "in %.0fs",
+                    attempt + 1,
+                    attempts,
+                    ART_ON_RETRY_DELAY,
+                )
+            # The wait between attempts is itself a listening window, so only
+            # the last attempt pays the full grace. A broadcast slower than
+            # the retry delay therefore costs one redundant write before it
+            # is seen — which is the right side to err on: "dropped" and
+            # "slow" are indistinguishable until one of them answers, the
+            # dropped write is the case that actually stranded the TV, and a
+            # second artModeOn at a panel already turning to art is a no-op.
+            if await self._art_mode_confirmed_by_broadcast(
+                since,
+                attempt,
+                attempts,
+                ART_ON_BROADCAST_GRACE if last else ART_ON_RETRY_DELAY,
+            ):
+                return True
+
+        return False
+
+    async def _art_mode_confirmed_by_broadcast(
+        self, since: int, attempt: int, attempts: int, seconds: float
+    ) -> bool:
+        """Watch for the TV's own art-on broadcast for up to ``seconds``."""
+        deadline = time.monotonic() + seconds
+        while True:
+            if self._art_api.art_mode_broadcast_since(since, True):
+                self._log.info(
+                    "Frame Art: the TV broadcast Art Mode ON after write %d/%d "
+                    "had already timed out — treating it as applied",
+                    attempt + 1,
+                    attempts,
+                )
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.5)
 
     def _hold_art_on_if_sent(self, guard) -> None:
         """Hold a failed art-on against a retry if its request left HA.
