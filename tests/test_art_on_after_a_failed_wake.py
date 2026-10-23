@@ -21,6 +21,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from homeassistant.components.media_player import MediaPlayerState
 
 if "pysmartthings" not in sys.modules:
@@ -35,20 +36,31 @@ if "pysmartthings" not in sys.modules:
     pysmartthings.SmartThings = object
     sys.modules["pysmartthings"] = pysmartthings
 
-from custom_components.samsungtv_smart.api.samsungws import (  # noqa: E402
-    ArtModeStatus,
-)
+from custom_components.samsungtv_smart.api.samsungws import ArtModeStatus  # noqa: E402
 from custom_components.samsungtv_smart.art_mode_guard import (  # noqa: E402
     ArtModeWriteSuppressed,
     guard_for,
 )
 from custom_components.samsungtv_smart.const import DOMAIN  # noqa: E402
-from custom_components.samsungtv_smart.media_player import (  # noqa: E402
-    SamsungTVDevice,
-)
+from custom_components.samsungtv_smart.media_player import SamsungTVDevice  # noqa: E402
 
 MP = "custom_components.samsungtv_smart.media_player"
 ENTRY = "entry-161"
+
+
+class _LeapingClock:
+    """A monotonic clock that jumps an hour per reading, so bounded waits end.
+
+    asyncio.sleep is stubbed out in these tests, so a wait bounded by
+    time.monotonic() would otherwise spin on the real clock.
+    """
+
+    def __init__(self):
+        self._now = 0.0
+
+    def monotonic(self):
+        self._now += 3600.0
+        return self._now
 
 
 def _device(*, reachable=(True,), art_state=None, written=False, sent=False):
@@ -68,6 +80,10 @@ def _device(*, reachable=(True,), art_state=None, written=False, sent=False):
         get_artmode=AsyncMock(return_value=art_state),
         set_artmode=AsyncMock(return_value=written),
         last_set_artmode_sent=sent,
+        # The retry path watches the art-on broadcast for a write whose reply
+        # is merely late; these doubles are about writes that never land.
+        art_mode_broadcast_count=0,
+        art_mode_broadcast_since=lambda _mark, _on: False,
     )
     return device
 
@@ -77,6 +93,7 @@ async def _ensure(device):
         patch.object(SamsungTVDevice, "state", new=MediaPlayerState.OFF),
         patch.object(SamsungTVDevice, "extra_state_attributes", new={}),
         patch(f"{MP}.asyncio.sleep", new=AsyncMock()),
+        patch(f"{MP}.time", new=_LeapingClock()),
     ):
         return await device._ensure_art_mode_ready()
 
@@ -163,6 +180,7 @@ async def test_a_tv_already_on_is_not_probed():
         patch.object(SamsungTVDevice, "state", new=MediaPlayerState.ON),
         patch.object(SamsungTVDevice, "extra_state_attributes", new={}),
         patch(f"{MP}.asyncio.sleep", new=AsyncMock()),
+        patch(f"{MP}.time", new=_LeapingClock()),
     ):
         assert await device._ensure_art_mode_ready() is True
     device._async_load_device_info.assert_not_awaited()
