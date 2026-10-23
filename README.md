@@ -1299,7 +1299,7 @@ When the TV wakes from standby (e.g. via an automation), the WebSocket connectio
 A Frame that has just woken also tends to **swallow the first art-mode write
 outright and answer the second one late** — measured on a QE55LS03D at 6.4 s
 to the `art_mode_changed` broadcast and 8.05 s to the reply, both past the
-5 s request budget. Since 8.13.0 the integration retries the write (more
+5 s request budget. Since 8.13.1 the integration retries the write (more
 often after a power-on) and accepts a late broadcast as proof that it took,
 instead of reporting `Failed to activate Art Mode` after a single attempt.
 
