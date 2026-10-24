@@ -961,6 +961,7 @@ called thanks to the cache. Personal-photo identification is off by default.
 
 - **[Frame Art Gallery Guide](Frame_Art_Gallery.md)** - Interactive Lovelace galleries
 - **[Frame Art Guide](Frame_Art.md)** - Complete service documentation
+- **[Frame Art Automations Cookbook](Frame_Art_Automations.md)** - Ambient-light brightness, slideshows, AI-chosen mattes, curated selections
 ---
 
 ## Automations & Tips
